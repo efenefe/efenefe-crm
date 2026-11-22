@@ -9,7 +9,7 @@ Runs on Cloudflare: one Worker serves the screens and the API, D1 stores the dat
 - **Today**: overdue follow-ups, due today, next 7 days, and a count of leads per status.
 - **Call list**: follow-ups due, then new leads (weak websites first). Log the outcome, note, status and next follow-up, then move to the next lead.
 - **Leads**: every lead, with search, filters and sorting.
-- **Find leads**: Google search by category and city (Phase 2, needs a Google Places API key).
+- **Find leads**: Google search by category and city. Each result's website is checked and flagged: weak website, no website, social page only, or good website.
 
 ## First-time setup (Cloudflare dashboard)
 
@@ -19,7 +19,8 @@ Runs on Cloudflare: one Worker serves the screens and the API, D1 stores the dat
    - Team domain: Zero Trust > Settings > Custom Pages (or Team name), like `yourteam.cloudflareaccess.com`.
    - Audience tag: Zero Trust > Access > Applications > `efenefe-crm` > Overview > Application Audience (AUD) Tag.
 
-   Put them in `wrangler.jsonc` under `vars` and push. Until both are set, the app refuses every request, so your data is never exposed.
+   Add both on the Worker under Settings > Variables and Secrets, as type **Text**, named `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`. Until both are set, the app refuses every request, so your data is never exposed.
+4. **Turn on lead search.** In Google Cloud, enable Places API (New), create an API key restricted to that API (not to a website), and set a budget alert. Add it on the Worker under Settings > Variables and Secrets, as type **Secret**, named `GOOGLE_PLACES_API_KEY`.
 
 ## Local development
 

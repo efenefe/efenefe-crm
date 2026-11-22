@@ -113,6 +113,12 @@ async function route(request, env, url, user) {
     }
   }
 
+  if (parts[0] === "search" && method === "POST") return json(await searchPlaces(env, db, await body(request)));
+  if (parts[0] === "check-site" && method === "POST") {
+    const { url: site } = await body(request);
+    return json(await checkSite(String(site || "")));
+  }
+
   if (parts[0] === "calls" && parts[1] && method === "DELETE") {
     await db.prepare("DELETE FROM calls WHERE id = ?").bind(parts[1]).run();
     return json({ ok: true });
@@ -235,6 +241,149 @@ async function logCall(db, leadId, input) {
       .bind(...cols.map((c) => update[c]), now, now, leadId),
   ]);
   return { call, lead: await getLead(db, leadId) };
+}
+
+// ---------- lead search (Google Places API, New) ----------
+
+const SOCIAL_HOSTS = [
+  "facebook.com", "fb.com", "fb.me", "instagram.com", "linktr.ee", "linkedin.com", "tiktok.com", "twitter.com",
+  "x.com", "yelp.com", "yelp.ca", "youtube.com", "business.site", "sites.google.com", "wa.me", "linkin.bio",
+];
+
+async function searchPlaces(env, db, input) {
+  const category = String(input.category || "").trim().slice(0, 100);
+  const city = String(input.city || "").trim().slice(0, 100);
+  if (!category || !city) throw new HttpError(400, "Enter a category and a city.");
+  const key = env.GOOGLE_PLACES_API_KEY;
+  if (!key) {
+    throw new HttpError(503, "Google search isn't set up. Add GOOGLE_PLACES_API_KEY as a secret on the Worker, then try again.");
+  }
+
+  const fields = [
+    "places.id", "places.displayName", "places.formattedAddress", "places.addressComponents",
+    "places.nationalPhoneNumber", "places.internationalPhoneNumber", "places.websiteUri",
+    "places.googleMapsUri", "places.businessStatus", "places.primaryTypeDisplayName", "nextPageToken",
+  ].join(",");
+
+  const places = [];
+  let pageToken;
+  let requests = 0;
+  do {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": fields },
+      body: JSON.stringify({ textQuery: `${category} in ${city}`, pageSize: 20, ...(pageToken ? { pageToken } : {}) }),
+    });
+    requests++;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data?.error?.message || `status ${res.status}`;
+      throw new HttpError(502, `Google rejected the search: ${msg}`);
+    }
+    places.push(...(data.places || []));
+    pageToken = data.nextPageToken;
+  } while (pageToken && requests < 3);
+
+  const { results: existing } = await db.prepare("SELECT place_id FROM leads WHERE place_id IS NOT NULL").all();
+  const known = new Set(existing.map((r) => r.place_id));
+
+  const results = places
+    .filter((p) => p.businessStatus !== "CLOSED_PERMANENTLY")
+    .map((p) => {
+      const comp = (t) => p.addressComponents?.find((c) => c.types?.includes(t))?.longText;
+      const website = p.websiteUri || null;
+      let flag = "unknown";
+      if (!website) flag = "none";
+      else if (isSocial(website)) flag = "social";
+      return {
+        place_id: p.id,
+        business: p.displayName?.text || "Unnamed business",
+        category: p.primaryTypeDisplayName?.text || category,
+        phone: p.nationalPhoneNumber || p.internationalPhoneNumber || null,
+        address: p.formattedAddress || null,
+        city: comp("locality") || comp("sublocality") || comp("postal_town") || city,
+        website,
+        maps_url: p.googleMapsUri || null,
+        site_flag: flag,
+        site_issues: [],
+        in_tracker: known.has(p.id),
+        temporarily_closed: p.businessStatus === "CLOSED_TEMPORARILY",
+      };
+    });
+  return { query: { category, city }, requests, results };
+}
+
+function isSocial(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return SOCIAL_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+}
+
+// Quick health check of a business website. Any issue marks it as a weak site.
+async function checkSite(raw) {
+  let url;
+  try {
+    url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    throw new HttpError(400, "That website address isn't valid.");
+  }
+  if (isSocial(url.href)) return { site_flag: "social", site_issues: ["Social page only"] };
+
+  const issues = [];
+  const httpsUrl = `https://${url.host}${url.pathname}${url.search}`;
+  const httpUrl = `http://${url.host}${url.pathname}${url.search}`;
+
+  let page = await fetchPage(httpsUrl);
+  if (!page.ok) {
+    const plain = await fetchPage(httpUrl);
+    if (!plain.ok) return { site_flag: "weak", site_issues: ["Site is down or unreachable"] };
+    page = plain;
+  }
+  if (!page.finalUrl.startsWith("https://")) issues.push("No HTTPS");
+  if (page.ms > 4000) issues.push("Slow to load");
+
+  const html = page.html;
+  if (!/<meta[^>]+name=["']?viewport/i.test(html)) issues.push("Not mobile friendly");
+
+  const year = new Date().getUTCFullYear();
+  const years = [...html.matchAll(/(?:©|&copy;|&#169;|copyright)[^<]{0,40}?((?:19|20)\d{2})(?:\s*[-–]\s*((?:19|20)\d{2}))?/gi)]
+    .map((m) => Number(m[2] || m[1]))
+    .filter((y) => y <= year);
+  if (years.length && Math.max(...years) <= year - 3) issues.push(`Copyright ${Math.max(...years)}`);
+
+  if (/<frameset|<marquee|<font[\s>]|\.swf["']/i.test(html)) issues.push("Outdated code");
+  if (/content=["']?(?:WordPress [1-4]\.|Microsoft FrontPage|iWeb|Adobe Dreamweaver)/i.test(html)) issues.push("Old site builder");
+
+  return { site_flag: issues.length ? "weak" : "good", site_issues: issues };
+}
+
+async function fetchPage(target) {
+  const started = Date.now();
+  try {
+    const res = await fetch(target, {
+      redirect: "follow",
+      headers: { "user-agent": "Mozilla/5.0 (compatible; efenefe-site-check/1.0)", accept: "text/html" },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (res.status >= 400) return { ok: false };
+    const reader = res.body?.getReader();
+    let html = "";
+    if (reader) {
+      const dec = new TextDecoder();
+      while (html.length < 300_000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        html += dec.decode(value, { stream: true });
+      }
+      reader.cancel().catch(() => {});
+    }
+    return { ok: true, finalUrl: res.url || target, html, ms: Date.now() - started };
+  } catch {
+    return { ok: false };
+  }
 }
 
 // ---------- auth (Cloudflare Access) ----------

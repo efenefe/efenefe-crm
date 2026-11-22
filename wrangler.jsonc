@@ -19,11 +19,7 @@
       "database_name": "efenefe-crm"
     }
   ],
-  // Not secrets. Kept here because each deploy replaces variables set in the dashboard.
-  "vars": {
-    // From Cloudflare Zero Trust > Settings: "<team>.cloudflareaccess.com"
-    "ACCESS_TEAM_DOMAIN": "",
-    // From the Access application's overview: "Application Audience (AUD) Tag"
-    "ACCESS_AUD": ""
-  }
+  // Login values (ACCESS_TEAM_DOMAIN, ACCESS_AUD) and the GOOGLE_PLACES_API_KEY secret are set in the
+  // Cloudflare dashboard. keep_vars stops deploys from wiping them.
+  "keep_vars": true
 }

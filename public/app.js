@@ -209,7 +209,7 @@ function renderToday() {
     <nav class="pipeline" aria-label="Leads by status">
       ${counts.map(([s, n]) => `<a href="#leads" data-status="${s}" class="${n ? "" : "zero"}"><b>${n}</b><span>${STATUS[s]}</span></a>`).join("")}
     </nav>
-    ${state.leads.length === 0 ? `<div class="empty"><b>No leads yet.</b> Add your first business with <b>Add lead</b>. Lead search arrives once your Google key is set up.</div>` : `
+    ${state.leads.length === 0 ? `<div class="empty"><b>No leads yet.</b> Add your first business with <b>Add lead</b>. Or find businesses with <b>Find leads</b>.</div>` : `
       ${overdue.length ? section("Overdue", overdue, "overdue", "") : ""}
       ${section("Due today", due, "", "Nothing due today.")}
       ${section("Next 7 days", soon, "", "No follow-ups scheduled this week.")}
@@ -225,7 +225,7 @@ function renderCalls() {
   if (!queue.length) {
     main.innerHTML = `
       <div class="page-head"><div><h1>Call list</h1><p>Follow-ups due and new leads, weak websites first.</p></div></div>
-      <div class="empty"><b>You're all caught up.</b> No follow-ups due and no new leads to call. Add leads from the Leads screen.</div>`;
+      <div class="empty"><b>You're all caught up.</b> No follow-ups due and no new leads to call. Find new businesses with Find leads.</div>`;
     return;
   }
 
@@ -442,15 +442,165 @@ function renderLeads() {
   $("#lead-flag").addEventListener("change", (e) => { f.flag = e.target.value; renderLeads(); });
 }
 
+const find = {
+  category: "", city: "", loading: false, error: "", data: null, selected: new Set(), showTracked: false, checking: 0,
+};
+try {
+  const saved = JSON.parse(localStorage.getItem("efenefe-last-search") || "null");
+  if (saved) Object.assign(find, { category: saved.query.category, city: saved.query.city, data: saved });
+  else find.city = localStorage.getItem("efenefe-city") || "";
+} catch {}
+
+function saveSearch() {
+  try { localStorage.setItem("efenefe-last-search", JSON.stringify(find.data)); } catch {}
+}
+
 function renderFind() {
   main.innerHTML = `
-    <div class="page-head"><div><h1>Find leads</h1><p>Search Google for businesses by category and city.</p></div></div>
-    <div class="soon">
-      <h2>Arrives in Phase 2</h2>
-      <p>Lead search turns on once your Google Places API key is added to the app. Results will be grouped and flagged so the best prospects come first:</p>
-      <div class="legend">${flagChip("weak")}${flagChip("none")}${flagChip("social")}${flagChip("good")}</div>
-      <p style="margin-top:14px">Until then, add businesses by hand from <a href="#leads">Leads</a>. You can set the website flag yourself on each lead.</p>
-    </div>`;
+    <div class="page-head"><div><h1>Find leads</h1><p>Search Google by business category and city. Weak websites come first.</p></div></div>
+    <form class="search-form" id="find-form" novalidate>
+      <label class="field">Category<input class="input" id="find-category" name="category" placeholder="Dentists" value="${esc(find.category)}" autocomplete="off"></label>
+      <label class="field">City<input class="input" id="find-city" name="city" placeholder="Mississauga" value="${esc(find.city)}"></label>
+      <button class="btn primary" type="submit" ${find.loading ? "disabled" : ""}>${find.loading ? "Searching…" : "Search"}</button>
+    </form>
+    <p class="hint">Each search uses up to 3 of your 1,000 free Google requests a month and returns up to 60 businesses.</p>
+    <div id="find-results"></div>`;
+  $("#find-form").addEventListener("submit", runSearch);
+  renderFindResults();
+}
+
+function renderFindResults() {
+  const box = $("#find-results");
+  if (!box) return;
+  if (find.error) {
+    box.innerHTML = `<div class="empty"><b>Search failed.</b> ${esc(find.error)}</div>`;
+    return;
+  }
+  if (find.loading) {
+    box.innerHTML = `<div class="empty">Searching Google for ${esc(find.category)} in ${esc(find.city)}…</div>`;
+    return;
+  }
+  if (!find.data) {
+    box.innerHTML = `<div class="soon"><h2>How results are flagged</h2>
+      <p>Each business gets one flag, so you know who needs a website most.</p>
+      <div class="legend">${flagChip("weak")}${flagChip("none")}${flagChip("social")}${flagChip("good")}</div></div>`;
+    return;
+  }
+
+  const all = find.data.results;
+  const tracked = all.filter((r) => r.in_tracker).length;
+  const list = all.filter((r) => find.showTracked || !r.in_tracker);
+  const groups = [
+    ["Weak website", list.filter((r) => r.site_flag === "weak")],
+    ["No website", list.filter((r) => r.site_flag === "none" || r.site_flag === "social")],
+    ["Checking website", list.filter((r) => r.site_flag === "unknown")],
+    ["Good website", list.filter((r) => r.site_flag === "good")],
+  ].filter(([, g]) => g.length);
+  const selectable = list.filter((r) => !r.in_tracker);
+  const sel = [...find.selected].filter((id) => selectable.some((r) => r.place_id === id));
+
+  const row = (r) => `
+    <li class="result ${r.in_tracker ? "tracked" : ""}">
+      <input type="checkbox" class="pick" data-pick="${esc(r.place_id)}" id="pick-${esc(r.place_id)}" ${find.selected.has(r.place_id) ? "checked" : ""} ${r.in_tracker ? "disabled" : ""} aria-label="Select ${esc(r.business)}">
+      <div class="result-main">
+        <div class="result-name">${esc(r.business)}${r.temporarily_closed ? ` <span class="status">Temporarily closed</span>` : ""}</div>
+        <div class="result-sub">${esc(r.address || r.city || "")}</div>
+        <div class="result-site">
+          ${r.site_flag === "unknown" ? `<span class="flag unknown">Checking…</span>` : flagChip(r.site_flag)}
+          ${r.website ? `<a href="${esc(webHref(r.website))}" target="_blank" rel="noopener">${esc(prettyUrl(r.website))}</a>` : ""}
+          ${r.site_issues?.length && r.site_flag === "weak" ? `<span class="issues">${r.site_issues.map((i) => `<span>${esc(i)}</span>`).join("")}</span>` : ""}
+        </div>
+      </div>
+      <div class="result-phone phone">${r.phone ? esc(r.phone) : `<span style="color:var(--ink-3)">No phone</span>`}</div>
+      <div class="result-act">${r.in_tracker ? `<span class="status">In tracker</span>` : `<button class="btn small" data-add="${esc(r.place_id)}">Add</button>`}</div>
+    </li>`;
+
+  box.innerHTML = `
+    <div class="results-bar">
+      <span><b>${all.length}</b> found for ${esc(find.data.query.category)} in ${esc(find.data.query.city)}${find.checking ? ` · checking ${find.checking} website${find.checking === 1 ? "" : "s"}…` : ""}</span>
+      <span class="results-actions">
+        ${tracked ? `<label class="check"><input type="checkbox" id="show-tracked" ${find.showTracked ? "checked" : ""}> Show ${tracked} already in tracker</label>` : ""}
+        <button class="btn small" data-select-all>${sel.length === selectable.length && selectable.length ? "Clear selection" : "Select all"}</button>
+        <button class="btn primary small" data-add-selected ${sel.length ? "" : "disabled"}>Add selected${sel.length ? ` (${sel.length})` : ""}</button>
+      </span>
+    </div>
+    ${groups.length ? groups.map(([title, g]) => `
+      <section class="section">
+        <div class="section-head"><h2>${title}</h2><span class="count">${g.length}</span></div>
+        <ul class="rows results">${g.map(row).join("")}</ul>
+      </section>`).join("") : `<div class="empty">Every business from this search is already in your tracker.</div>`}`;
+
+  const st = $("#show-tracked");
+  if (st) st.addEventListener("change", () => { find.showTracked = st.checked; renderFindResults(); });
+}
+
+async function runSearch(e) {
+  e.preventDefault();
+  find.category = $("#find-category").value.trim();
+  find.city = $("#find-city").value.trim();
+  if (!find.category || !find.city) return toast("Enter a category and a city.", true);
+  try { localStorage.setItem("efenefe-city", find.city); } catch {}
+  find.loading = true;
+  find.error = "";
+  find.selected.clear();
+  renderFind();
+  try {
+    find.data = await api("POST", "search", { category: find.category, city: find.city });
+    saveSearch();
+  } catch (err) {
+    find.error = err.message;
+  }
+  find.loading = false;
+  renderFind();
+  if (find.data && !find.error) checkSites(find.data);
+}
+
+async function checkSites(data) {
+  const queue = data.results.filter((r) => r.site_flag === "unknown" && r.website);
+  find.checking = queue.length;
+  renderFindResults();
+  const worker = async () => {
+    while (queue.length) {
+      const r = queue.shift();
+      try {
+        const res = await api("POST", "check-site", { url: r.website });
+        r.site_flag = res.site_flag;
+        r.site_issues = res.site_issues;
+      } catch {
+        r.site_flag = "weak";
+        r.site_issues = ["Couldn't check site"];
+      }
+      if (find.data !== data) return;
+      find.checking--;
+      saveSearch();
+      if (state.view === "find") renderFindResults();
+    }
+  };
+  await Promise.all(Array.from({ length: 5 }, worker));
+}
+
+async function addResults(ids) {
+  const items = find.data.results.filter((r) => ids.includes(r.place_id) && !r.in_tracker);
+  let added = 0;
+  for (const r of items) {
+    try {
+      const { lead } = await api("POST", "leads", {
+        business: r.business, category: r.category, phone: r.phone, website: r.website, address: r.address,
+        city: r.city, place_id: r.place_id, site_flag: r.site_flag, site_issues: r.site_issues,
+        source: `search: ${find.data.query.category} in ${find.data.query.city}`, status: "to_call",
+      });
+      upsertLead(lead);
+      added++;
+      r.in_tracker = true;
+    } catch (err) {
+      if (/already/i.test(err.message)) r.in_tracker = true;
+      else toast(err.message, true);
+    }
+    find.selected.delete(r.place_id);
+  }
+  saveSearch();
+  render();
+  if (added) toast(added === 1 ? `Added ${items[0].business} to your call list` : `Added ${added} leads to your call list`);
 }
 
 // ---------- panel ----------
@@ -579,6 +729,29 @@ document.addEventListener("click", async (e) => {
       toast("Couldn't copy. Select the number instead.", true);
     }
     return;
+  }
+
+  const pick = t.closest("[data-pick]");
+  if (pick) {
+    if (pick.checked) find.selected.add(pick.dataset.pick);
+    else find.selected.delete(pick.dataset.pick);
+    return renderFindResults();
+  }
+  if (t.closest("[data-select-all]")) {
+    const selectable = find.data.results.filter((r) => !r.in_tracker && (find.showTracked || !r.in_tracker)).map((r) => r.place_id);
+    const all = selectable.every((id) => find.selected.has(id));
+    find.selected = all ? new Set() : new Set(selectable);
+    return renderFindResults();
+  }
+  const add = t.closest("[data-add]");
+  if (add) {
+    add.disabled = true;
+    return addResults([add.dataset.add]);
+  }
+  const addSel = t.closest("[data-add-selected]");
+  if (addSel) {
+    addSel.disabled = true;
+    return addResults([...find.selected]);
   }
 
   const sort = t.closest("[data-sort]");
