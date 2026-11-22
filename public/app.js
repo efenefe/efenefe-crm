@@ -308,7 +308,7 @@ function renderToday() {
     <section class="card">
       <div class="card-head"><h2>Follow-ups</h2><a class="link" href="#leads">All leads →</a></div>
       ${state.leads.length === 0
-        ? `<div class="empty"><b>No leads yet.</b> Search Google with <a href="#find">Find leads</a>, or add one with the + button.</div>`
+        ? `<div class="empty"><b>No leads yet.</b> Search Google with <a href="#find">Find leads</a>, or add one with <b>Add lead</b> above.</div>`
         : overdue.length + due.length + soon.length
           ? group("Overdue", overdue, "overdue") + group("Due today", due, "") + group("Next 7 days", soon, "")
           : `<div class="empty"><b>Nothing scheduled this week.</b> Follow-ups you set when logging a call show up here.</div>`}
