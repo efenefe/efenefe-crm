@@ -84,7 +84,7 @@ async function route(request, env, url, user) {
   // Call times for the last 15 days. The screen buckets them by local day.
   if (parts[0] === "stats" && method === "GET") {
     const since = new Date(Date.now() - 15 * 864e5).toISOString();
-    const { results } = await db.prepare("SELECT called_at, outcome FROM calls WHERE called_at >= ? ORDER BY called_at").bind(since).all();
+    const { results } = await db.prepare("SELECT c.called_at, c.outcome, l.business FROM calls c LEFT JOIN leads l ON l.id = c.lead_id WHERE c.called_at >= ? ORDER BY c.called_at").bind(since).all();
     return json({ calls: results });
   }
 

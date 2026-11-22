@@ -222,9 +222,45 @@ async function loadStats() {
   if (state.view === "today") renderToday();
 }
 
-function statTile({ href, status, icon, accent, label, num, foot, spark = "" }) {
+function ringSvg(pct, hue, label) {
+  const r = 20, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, pct));
+  return `<span class="ring ${hue}" role="img" aria-label="${esc(label)}" title="${esc(label)}">
+    <svg viewBox="0 0 48 48"><circle class="track" cx="24" cy="24" r="${r}"/>${v ? `<circle class="val" cx="24" cy="24" r="${r}" stroke-dasharray="${(v / 100) * c} ${c}"/>` : ""}</svg>
+    <b>${Math.round(v)}%</b></span>`;
+}
+
+function ago(iso) {
+  const m = Math.round((Date.now() - new Date(iso)) / 6e4);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : `${d} days ago`;
+}
+
+function activityCard() {
+  const since = Date.now() - 7 * 864e5;
+  const calls = (state.stats?.calls || []).filter((c) => new Date(c.called_at) >= since);
+  if (!calls.length) return "";
+  const groups = Object.keys(OUTCOME)
+    .map((o) => ({ o, list: calls.filter((c) => c.outcome === o) }))
+    .filter((g) => g.list.length)
+    .sort((a, b) => b.list.length - a.list.length);
+  return `
+    <section class="card">
+      <div class="card-head"><h2>This week's calls</h2><span class="count">${calls.length}</span></div>
+      <ul class="activity">${groups.map(({ o, list }) => {
+        const last = list[list.length - 1];
+        const w = Math.max(30, Math.round((list.length / calls.length) * 100));
+        return `<li><div class="block hue-${o}" style="width:${w}%"><b>${esc(OUTCOME[o])} · ${list.length}</b><span>${esc(last.business || "Deleted lead")}, ${esc(ago(last.called_at))}</span></div></li>`;
+      }).join("")}</ul>
+    </section>`;
+}
+
+function statTile({ href, status, icon, badge = "", label, num, foot, spark = "" }) {
   return `<a class="card stat" href="${href}" ${status ? `data-status="${status}"` : ""}>
-    <div class="stat-top"><span class="badge ${accent ? "accent" : ""}">${ICON[icon]}</span><span class="stat-label">${label}</span></div>
+    <div class="stat-top"><span class="badge ${badge}">${ICON[icon]}</span><span class="stat-label">${label}</span></div>
     <span class="stat-go" aria-hidden="true">${ICON.go}</span>
     <div class="stat-num">${num}</div>
     <div class="stat-foot"><span>${foot}</span>${spark}</div>
@@ -241,6 +277,7 @@ function renderToday() {
   const due = open.filter((l) => l.next_follow_up === t);
   const soon = open.filter((l) => l.next_follow_up > t && l.next_follow_up <= in7).sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up));
   const toCall = newToCall();
+  const best = toCall.filter((l) => l.site_flag === "weak" || l.site_flag === "none" || l.site_flag === "social").slice(0, 5);
   const queue = callQueue();
   const dueCount = overdue.length + due.length;
   const addedThisWeek = state.leads.filter((l) => l.created_at && ymd(new Date(l.created_at)) > weekAgo).length;
@@ -252,6 +289,7 @@ function renderToday() {
   const peak = Math.max(1, ...days.slice(7));
   const spark = `<span class="spark" aria-hidden="true">${days.slice(7).map((n) => `<i class="${n ? "on" : ""}" style="height:${Math.max(12, (n / peak) * 100)}%"></i>`).join("")}</span>`;
   const won = state.leads.filter((l) => l.status === "won").length;
+  const lost = state.leads.filter((l) => l.status === "lost").length;
   const warm = state.leads.filter((l) => l.status === "interested" || l.status === "proposal").length;
 
   const name = firstName();
@@ -298,10 +336,10 @@ function renderToday() {
   const pipeCard = `
     <section class="card">
       <div class="card-head"><h2>Pipeline</h2><span class="count">${state.leads.length}</span></div>
-      <ul class="bars">${counts.map(([s, n]) => `<li><a href="#leads" data-status="${s}" class="${n ? "" : "zero"}"><span>${STATUS[s]}</span><span class="track"><span class="fill" style="width:${(n / max) * 100}%"></span></span><b>${n}</b></a></li>`).join("")}</ul>
+      <ul class="bars">${counts.map(([s, n]) => `<li><a href="#leads" data-status="${s}" class="hue-${s} ${n ? "" : "zero"}"><span><i class="dot"></i>${STATUS[s]}</span><span class="track"><span class="fill" style="width:${(n / max) * 100}%"></span></span><b>${n}</b></a></li>`).join("")}</ul>
     </section>`;
 
-  const best = toCall.filter((l) => l.site_flag === "weak" || l.site_flag === "none" || l.site_flag === "social").slice(0, 5);
+
   const bestCard = best.length ? `
     <section class="card">
       <div class="card-head"><h2>Best prospects</h2><a class="link" href="#leads" data-status="to_call">See all →</a></div>
@@ -323,16 +361,20 @@ function renderToday() {
     <div class="dash">
       <div class="dash-main">
         <div class="stats">
-          ${statTile({ href: "#calls", icon: "bell", accent: dueCount > 0, label: "Follow-ups due", num: dueCount,
-            foot: overdue.length ? `<span class="delta bad">${overdue.length} overdue</span>` : `<span class="delta">${soon.length} this week</span>` })}
-          ${statTile({ href: "#calls", icon: "user", label: "New leads to call", num: toCall.length,
-            foot: addedThisWeek ? `<span class="delta up">+${addedThisWeek}</span> added this week` : "None added this week" })}
-          ${statTile({ href: "#leads", icon: "phone", label: "Calls this week", num: state.stats ? thisWeek : "–",
+          ${statTile({ href: "#calls", icon: "bell", badge: "amber", label: "Follow-ups due", num: dueCount,
+            foot: overdue.length ? `<span class="delta bad">${overdue.length} overdue</span>` : `<span class="delta">${soon.length} this week</span>`,
+            spark: dueCount ? ringSvg((due.length / dueCount) * 100, "amber", `${Math.round((due.length / dueCount) * 100)}% on time`) : "" })}
+          ${statTile({ href: "#calls", icon: "user", badge: "sky", label: "New leads to call", num: toCall.length,
+            foot: addedThisWeek ? `<span class="delta up">+${addedThisWeek}</span> this week` : "None added this week",
+            spark: toCall.length ? ringSvg((toCall.filter((l) => FLAG_RANK[l.site_flag] <= 1).length / toCall.length) * 100, "sky", "Share with a weak site or no site") : "" })}
+          ${statTile({ href: "#leads", icon: "phone", badge: "indigo", label: "Calls this week", num: state.stats ? thisWeek : "–",
             foot: state.stats && !state.stats.failed ? `<span class="delta ${diff > 0 ? "up" : ""}">${diff > 0 ? "↑" : diff < 0 ? "↓" : ""}${diff ? Math.abs(diff) : "Same"}</span> vs last week` : "", spark: state.stats ? spark : "" })}
-          ${statTile({ href: "#leads", status: "won", icon: "trophy", accent: won > 0, label: "Clients won", num: won,
-            foot: warm ? `<span class="delta up">${warm} warm</span> interested or proposal` : "No warm leads yet" })}
+          ${statTile({ href: "#leads", status: "won", icon: "trophy", badge: "mint", label: "Clients won", num: won,
+            foot: warm ? `<span class="delta up">${warm} warm</span> in play` : "No warm leads yet",
+            spark: won + lost ? ringSvg((won / (won + lost)) * 100, "mint", `${Math.round((won / (won + lost)) * 100)}% win rate`) : "" })}
         </div>
         ${followCard}
+        ${activityCard()}
       </div>
       <aside class="rail">
         ${nextCard}
