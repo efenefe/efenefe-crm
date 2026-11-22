@@ -141,13 +141,13 @@ function upsertLead(lead) {
 function followUpsDue() {
   const t = today();
   return state.leads
-    .filter((l) => l.next_follow_up && l.next_follow_up <= t && !CLOSED.has(l.status))
+    .filter((l) => !l.later && l.next_follow_up && l.next_follow_up <= t && !CLOSED.has(l.status))
     .sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up) || FLAG_RANK[a.site_flag] - FLAG_RANK[b.site_flag]);
 }
 function newToCall() {
   const t = today();
   return state.leads
-    .filter((l) => l.status === "to_call" && !(l.next_follow_up && l.next_follow_up <= t))
+    .filter((l) => !l.later && l.status === "to_call" && !(l.next_follow_up && l.next_follow_up <= t))
     .sort((a, b) => (FLAG_RANK[a.site_flag] ?? 2) - (FLAG_RANK[b.site_flag] ?? 2) || a.created_at.localeCompare(b.created_at));
 }
 function callQueue() {
@@ -272,7 +272,7 @@ function renderToday() {
   const t = today();
   const in7 = addDays(7);
   const weekAgo = addDays(-7);
-  const open = state.leads.filter((l) => !CLOSED.has(l.status) && l.next_follow_up);
+  const open = state.leads.filter((l) => !l.later && !CLOSED.has(l.status) && l.next_follow_up);
   const overdue = open.filter((l) => l.next_follow_up < t).sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up));
   const due = open.filter((l) => l.next_follow_up === t);
   const soon = open.filter((l) => l.next_follow_up > t && l.next_follow_up <= in7).sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up));
@@ -428,7 +428,7 @@ function callCard(l) {
         <h2 class="big">${esc(l.business)}</h2>
         <div class="meta">${flagChip(l.site_flag)} ${statusChip(l.status)} ${l.next_follow_up ? `<span class="due ${dueClass(l.next_follow_up)}">Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}</span>` : ""}</div>
       </div>
-      <button class="btn small" data-open="${esc(l.id)}">Edit lead</button>
+      <span class="head-actions"><button class="btn small" data-later-one="${esc(l.id)}" data-on="1">Save for later</button><button class="btn small" data-open="${esc(l.id)}">Edit lead</button></span>
     </div>
     <div class="dial">
       ${l.phone ? `<a class="phone-big" href="${esc(tel)}">${esc(l.phone)}</a>
@@ -581,9 +581,14 @@ function renderLeads() {
     </div>` : `
     <div class="sel-bar">
       <span><b>${sel.length}</b> selected</span>
-      <span class="sel-actions"><button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
+      <span class="sel-actions">${sel.every((id) => state.leads.find((l) => l.id === id)?.later)
+        ? `<button class="btn small" data-later-bulk="0">Move back to active</button>`
+        : `<button class="btn small" data-later-bulk="1">Save for later</button>`}<button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
     </div>`;
 
+  const active = list.filter((l) => !l.later);
+  const saved = list.filter((l) => l.later);
+  list = [...active, ...saved];
   state.shownLeadIds = list.map((l) => l.id);
   main.innerHTML = `
     <div class="page-head"><div><h1>Leads</h1><p>${state.leads.length} business${state.leads.length === 1 ? "" : "es"} in your tracker.</p></div>
@@ -605,7 +610,7 @@ function renderLeads() {
     ${list.length ? `
     <div class="table-wrap"><table class="leads">
       <thead><tr><th class="sel-cell"><input type="checkbox" class="pick" data-lsel-all ${allShownSelected ? "checked" : ""} aria-label="Select all shown"></th>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
-      <tbody>${list.map((l) => `<tr data-open="${esc(l.id)}" tabindex="0" ${state.leadSel.has(l.id) ? 'class="selected"' : ""}>
+      <tbody>${list.map((l, i) => `${l.later && (i === 0 || !list[i - 1].later) ? `<tr class="later-head"><td colspan="7"><span>Saved for later</span><b>${saved.length}</b><small>Not in your Call list or Today until you move them back.</small></td></tr>` : ""}<tr data-open="${esc(l.id)}" tabindex="0" class="${state.leadSel.has(l.id) ? "selected" : ""} ${l.later ? "later" : ""}">
         <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
         <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
         <td>${flagChip(l.site_flag)}</td>
@@ -792,6 +797,22 @@ async function addResults(ids) {
   if (added) toast(added === 1 ? `Added ${items[0].business} to your call list` : `Added ${added} leads to your call list`);
 }
 
+async function setLater(ids, on) {
+  let n = 0;
+  for (const id of ids) {
+    try {
+      const { lead } = await api("PATCH", `leads/${id}`, { later: on });
+      upsertLead(lead);
+      n++;
+    } catch (err) {
+      toast(err.message, true);
+      break;
+    }
+  }
+  render();
+  if (n) toast(on ? `Saved ${n === 1 ? "1 lead" : `${n} leads`} for later` : `Moved ${n === 1 ? "1 lead" : `${n} leads`} back to active`);
+}
+
 async function moveBack(ids) {
   let moved = 0;
   for (const id of ids) {
@@ -829,6 +850,7 @@ function openPanel(id) {
       <button class="btn ghost small" data-close aria-label="Close">Close</button>
     </div>
     <div class="panel-body">
+      ${lead?.later ? `<div class="saved-note">Saved for later. It stays out of your Call list and Today until you move it back.</div>` : ""}
       ${lead && lead.phone ? `<div class="dial"><a class="phone-big" href="${esc(telHref(lead.phone))}">${esc(lead.phone)}</a><button class="btn small" data-copy="${esc(lead.phone)}">Copy</button></div>` : ""}
       <form class="form" id="lead-form" novalidate>
         <label class="field">Business name *<input class="input" name="business" id="f-business" required value="${v("business")}"></label>
@@ -855,7 +877,7 @@ function openPanel(id) {
         </div>
         <label class="field">Notes<textarea class="input" name="notes" id="f-notes">${v("notes")}</textarea></label>
         <div class="form-actions">
-          <span>${lead ? `${lead.place_id ? `<button type="button" class="btn ghost small" data-move-one="${esc(lead.id)}">Move back to Find leads</button>` : ""}<button type="button" class="btn ghost danger small" data-delete>Delete lead</button>` : ""}</span>
+          <span>${lead ? `<button type="button" class="btn ghost small" data-later-one="${esc(lead.id)}" data-on="${lead.later ? 0 : 1}">${lead.later ? "Move back to active" : "Save for later"}</button>${lead.place_id ? `<button type="button" class="btn ghost small" data-move-one="${esc(lead.id)}">Move back to Find leads</button>` : ""}<button type="button" class="btn ghost danger small" data-delete>Delete lead</button>` : ""}</span>
           <button type="submit" class="btn primary">${lead ? "Save changes" : "Add lead"}</button>
         </div>
       </form>
@@ -928,6 +950,18 @@ document.addEventListener("click", async (e) => {
     return renderLeads();
   }
   if (t.closest(".sel-cell")) return; // clicks around the checkbox don't open the lead
+  const lb = t.closest("[data-later-bulk]");
+  if (lb) {
+    lb.disabled = true;
+    return setLater([...state.leadSel], lb.dataset.laterBulk === "1");
+  }
+  const lo = t.closest("[data-later-one]");
+  if (lo) {
+    lo.disabled = true;
+    await setLater([lo.dataset.laterOne], lo.dataset.on === "1");
+    if (state.panel) openPanel(state.panel.id);
+    return;
+  }
   if (t.closest("[data-sel-clear]")) { state.leadSel.clear(); state.moveConfirm = false; return renderLeads(); }
   if (t.closest("[data-move-back]")) { state.moveConfirm = true; return renderLeads(); }
   if (t.closest("[data-move-no]")) { state.moveConfirm = false; return renderLeads(); }
@@ -1034,8 +1068,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("hashchange", () => setView(location.hash.slice(1)));
-const topBar = $(".top");
-const onScroll = () => topBar.classList.toggle("scrolled", window.scrollY > 4);
+const onScroll = () => document.body.classList.toggle("scrolled", window.scrollY > 4);
 window.addEventListener("scroll", onScroll, { passive: true });
 onScroll();
 
