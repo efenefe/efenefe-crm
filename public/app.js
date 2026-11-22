@@ -27,7 +27,7 @@ const state = {
   leads: [],
   me: "",
   view: "today",
-  leadsFilter: { q: "", status: "open", flag: "all", sort: "next_follow_up", dir: "asc" },
+  leadsFilter: { q: "", status: "open", flag: "all", complex: false, sort: "next_follow_up", dir: "asc" },
   leadSel: new Set(),
   moveConfirm: false,
   callIndex: 0,
@@ -102,6 +102,7 @@ function when(iso) {
 
 const flagChip = (f) => `<span class="flag ${esc(f)}">${esc(FLAG[f] || FLAG.unknown)}</span>`;
 const statusChip = (s) => `<span class="status ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
+const complexTag = (l) => (l.complex ? `<span class="tag-complex" title="Complex job">Complex</span>` : "");
 const dueChip = (s) => (s ? `<span class="due ${dueClass(s)}">${esc(dueLabel(s))}</span>` : "");
 
 let toastTimer;
@@ -175,7 +176,7 @@ function render() {
 
 function leadRow(l, { showDue = true } = {}) {
   return `<li class="row" data-open="${esc(l.id)}" tabindex="0">
-    <span class="name">${esc(l.business)}<span class="sub">${esc([l.category, l.city].filter(Boolean).join(" · ") || l.contact || "")}</span></span>
+    <span class="name">${esc(l.business)}${complexTag(l)}<span class="sub">${esc([l.category, l.city].filter(Boolean).join(" · ") || l.contact || "")}</span></span>
     <span class="flag-cell">${flagChip(l.site_flag)}</span>
     <span class="phone">${esc(l.phone || "")}</span>
     <span class="status-cell">${statusChip(l.status)}</span>
@@ -336,6 +337,7 @@ function renderToday() {
   const pipeCard = `
     <section class="card">
       <div class="card-head"><h2>Pipeline</h2><span class="count">${state.leads.length}</span></div>
+      ${state.leads.some((l) => l.complex) ? `<a class="complex-link" href="#leads" data-complex-link><span class="tag-complex">Complex</span><span>${state.leads.filter((l) => l.complex && !CLOSED.has(l.status)).length} open complex job${state.leads.filter((l) => l.complex && !CLOSED.has(l.status)).length === 1 ? "" : "s"}</span><span aria-hidden="true">→</span></a>` : ""}
       <ul class="bars">${counts.map(([s, n]) => `<li><a href="#leads" data-status="${s}" class="hue-${s} ${n ? "" : "zero"}"><span><i class="dot"></i>${STATUS[s]}</span><span class="track"><span class="fill" style="width:${(n / max) * 100}%"></span></span><b>${n}</b></a></li>`).join("")}</ul>
     </section>`;
 
@@ -399,7 +401,7 @@ function renderCalls() {
 
   const item = (l, i) => `
     <li class="row" data-call-index="${i}" tabindex="0" ${i === state.callIndex ? 'aria-current="true"' : ""}>
-      <span class="name">${esc(l.business)}<span class="sub">${dueIds.has(l.id) ? `Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}` : esc(l.city || l.category || "New lead")}</span></span>
+      <span class="name">${esc(l.business)}${complexTag(l)}<span class="sub">${dueIds.has(l.id) ? `Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}` : esc(l.city || l.category || "New lead")}</span></span>
       <span>${flagChip(l.site_flag)}</span>
     </li>`;
   const dueList = queue.filter((l) => dueIds.has(l.id));
@@ -426,7 +428,7 @@ function callCard(l) {
     <div class="card-head">
       <div style="min-width:0">
         <h2 class="big">${esc(l.business)}</h2>
-        <div class="meta">${flagChip(l.site_flag)} ${statusChip(l.status)} ${l.next_follow_up ? `<span class="due ${dueClass(l.next_follow_up)}">Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}</span>` : ""}</div>
+        <div class="meta">${flagChip(l.site_flag)} ${statusChip(l.status)} ${complexTag(l)} ${l.next_follow_up ? `<span class="due ${dueClass(l.next_follow_up)}">Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}</span>` : ""}</div>
       </div>
       <button class="btn small" data-open="${esc(l.id)}">Edit lead</button>
     </div>
@@ -554,6 +556,7 @@ function renderLeads() {
     if (f.status === "open" && CLOSED.has(l.status)) return false;
     if (f.status !== "open" && f.status !== "all" && l.status !== f.status) return false;
     if (f.flag !== "all" && l.site_flag !== f.flag) return false;
+    if (f.complex && !l.complex) return false;
     if (q && ![l.business, l.phone, l.city, l.category, l.contact, l.email].some((v) => String(v || "").toLowerCase().includes(q))) return false;
     return true;
   });
@@ -581,7 +584,9 @@ function renderLeads() {
     </div>` : `
     <div class="sel-bar">
       <span><b>${sel.length}</b> selected</span>
-      <span class="sel-actions"><button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
+      <span class="sel-actions">${sel.every((id) => state.leads.find((l) => l.id === id)?.complex)
+        ? `<button class="btn small" data-complex-bulk="0">Remove complex job</button>`
+        : `<button class="btn small" data-complex-bulk="1">Mark as complex job</button>`}<button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
     </div>`;
 
   state.shownLeadIds = list.map((l) => l.id);
@@ -589,7 +594,7 @@ function renderLeads() {
     <div class="page-head"><div><h1>Leads</h1><p>${state.leads.length} business${state.leads.length === 1 ? "" : "es"} in your tracker.</p></div>
       <button class="btn primary" data-new>Add lead</button></div>
     <section class="card table-card">
-    <div class="card-head"><h2>${f.status === "open" ? "Open leads" : f.status === "all" ? "All leads" : esc(STATUS[f.status])}<span class="count">${list.length}</span></h2>
+    <div class="card-head"><h2>${f.complex ? "Complex jobs" : f.status === "open" ? "Open leads" : f.status === "all" ? "All leads" : esc(STATUS[f.status])}<span class="count">${list.length}</span></h2>
     <div class="toolbar">
       <input class="input search" id="lead-search" type="search" placeholder="Search name, phone, city…" value="${esc(f.q)}" aria-label="Search leads">
       <select class="input" id="lead-status" aria-label="Status">
@@ -600,6 +605,7 @@ function renderLeads() {
         <option value="all">Any website</option>
         ${Object.entries(FLAG).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
       </select>
+      <button type="button" class="btn small toggle" data-complex-filter aria-pressed="${f.complex}">Complex jobs <b>${state.leads.filter((l) => l.complex).length}</b></button>
     </div></div>
     ${selBar}
     ${list.length ? `
@@ -607,7 +613,7 @@ function renderLeads() {
       <thead><tr><th class="sel-cell"><input type="checkbox" class="pick" data-lsel-all ${allShownSelected ? "checked" : ""} aria-label="Select all shown"></th>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
       <tbody>${list.map((l) => `<tr data-open="${esc(l.id)}" tabindex="0" ${state.leadSel.has(l.id) ? 'class="selected"' : ""}>
         <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
-        <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
+        <td><span class="name">${esc(l.business)}</span>${complexTag(l)}${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
         <td>${flagChip(l.site_flag)}</td>
         <td class="hide-phone phone">${esc(l.phone || "")}</td>
         <td class="hide-phone">${esc(l.city || "")}</td>
@@ -792,6 +798,22 @@ async function addResults(ids) {
   if (added) toast(added === 1 ? `Added ${items[0].business} to your call list` : `Added ${added} leads to your call list`);
 }
 
+async function setComplex(ids, on) {
+  let n = 0;
+  for (const id of ids) {
+    try {
+      const { lead } = await api("PATCH", `leads/${id}`, { complex: on });
+      upsertLead(lead);
+      n++;
+    } catch (err) {
+      toast(err.message, true);
+      break;
+    }
+  }
+  render();
+  if (n) toast(on ? `Marked ${n} as complex job${n === 1 ? "" : "s"}` : `Removed complex job from ${n} lead${n === 1 ? "" : "s"}`);
+}
+
 async function moveBack(ids) {
   let moved = 0;
   for (const id of ids) {
@@ -854,6 +876,7 @@ function openPanel(id) {
           <label class="field">Next follow-up<input class="input" type="date" name="next_follow_up" id="f-next" value="${v("next_follow_up")}"></label>
         </div>
         <label class="field">Notes<textarea class="input" name="notes" id="f-notes">${v("notes")}</textarea></label>
+        <label class="switch"><input type="checkbox" name="complex" id="f-complex" ${lead?.complex ? "checked" : ""}><span class="switch-ui" aria-hidden="true"></span><span><b>Complex job</b><small>Bigger or custom build. Shows under Complex jobs on Leads.</small></span></label>
         <div class="form-actions">
           <span>${lead ? `${lead.place_id ? `<button type="button" class="btn ghost small" data-move-one="${esc(lead.id)}">Move back to Find leads</button>` : ""}<button type="button" class="btn ghost danger small" data-delete>Delete lead</button>` : ""}</span>
           <button type="submit" class="btn primary">${lead ? "Save changes" : "Add lead"}</button>
@@ -884,6 +907,7 @@ function openPanel(id) {
     if (!data.business.trim()) return toast("Business name is required.", true);
     data.site_issues = data.site_issues.split(",").map((s) => s.trim()).filter(Boolean);
     data.next_follow_up = data.next_follow_up || null;
+    data.complex = form.complex.checked;
     const btn = form.querySelector('[type="submit"]');
     btn.disabled = true;
     try {
@@ -928,6 +952,20 @@ document.addEventListener("click", async (e) => {
     return renderLeads();
   }
   if (t.closest(".sel-cell")) return; // clicks around the checkbox don't open the lead
+  if (t.closest("[data-complex-filter]")) {
+    const f = state.leadsFilter;
+    f.complex = !f.complex;
+    if (f.complex) f.status = "all";
+    return renderLeads();
+  }
+  if (t.closest("[data-complex-link]")) {
+    Object.assign(state.leadsFilter, { complex: true, status: "all", flag: "all", q: "" });
+  }
+  const cb = t.closest("[data-complex-bulk]");
+  if (cb) {
+    cb.disabled = true;
+    return setComplex([...state.leadSel], cb.dataset.complexBulk === "1");
+  }
   if (t.closest("[data-sel-clear]")) { state.leadSel.clear(); state.moveConfirm = false; return renderLeads(); }
   if (t.closest("[data-move-back]")) { state.moveConfirm = true; return renderLeads(); }
   if (t.closest("[data-move-no]")) { state.moveConfirm = false; return renderLeads(); }
@@ -1001,6 +1039,7 @@ document.addEventListener("click", async (e) => {
   const pipe = t.closest("a[data-status]");
   if (pipe) {
     state.leadsFilter.status = pipe.dataset.status;
+    state.leadsFilter.complex = false;
     state.leadsFilter.flag = "all";
     state.leadsFilter.q = "";
   }

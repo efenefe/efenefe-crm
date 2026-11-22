@@ -6,7 +6,7 @@ const FLAGS = ["unknown", "none", "social", "weak", "good"];
 
 const LEAD_FIELDS = [
   "business", "category", "phone", "email", "contact", "website", "address", "city",
-  "site_flag", "site_issues", "status", "next_follow_up", "notes", "source", "place_id",
+  "site_flag", "site_issues", "status", "next_follow_up", "notes", "source", "place_id", "complex",
 ];
 
 const SCHEMA = [
@@ -36,10 +36,24 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS calls_lead ON calls(lead_id, called_at)`,
 ];
 
+// Columns added after the first release. Each runs once; "duplicate column" means it is already there.
+const MIGRATIONS = ["ALTER TABLE leads ADD COLUMN complex INTEGER NOT NULL DEFAULT 0"];
+let migrateDb = null;
+async function migrate() {
+  for (const sql of MIGRATIONS) {
+    try {
+      await migrateDb.prepare(sql).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e.message))) throw e;
+    }
+  }
+}
+
 let schemaReady = null;
 function ensureSchema(db) {
   if (!schemaReady) {
-    schemaReady = db.batch(SCHEMA.map((s) => db.prepare(s))).catch((e) => {
+    migrateDb = db;
+    schemaReady = db.batch(SCHEMA.map((s) => db.prepare(s))).then(migrate).catch((e) => {
       schemaReady = null;
       throw e;
     });
@@ -141,7 +155,9 @@ function cleanLead(input, { partial }) {
   for (const f of LEAD_FIELDS) {
     if (!(f in input)) continue;
     let v = input[f];
-    if (f === "site_issues") {
+    if (f === "complex") {
+      v = v === true || v === 1 || v === "1" || v === "on" || v === "true" ? 1 : 0;
+    } else if (f === "site_issues") {
       v = Array.isArray(v) ? JSON.stringify(v.map(String).slice(0, 20)) : null;
     } else if (v === null || v === undefined) {
       v = null;
@@ -210,7 +226,7 @@ function decodeLead(row) {
   try {
     issues = row.site_issues ? JSON.parse(row.site_issues) : [];
   } catch {}
-  return { ...row, site_issues: issues };
+  return { ...row, site_issues: issues, complex: !!row.complex };
 }
 
 // ---------- calls ----------
