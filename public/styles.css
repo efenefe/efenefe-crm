@@ -204,26 +204,6 @@ textarea.input { min-height: 88px; resize: vertical; line-height: 1.45; }
 .hue-proposal, .hue-not_interested { --hue: var(--pink); --hue-bg: var(--pink-bg);  --hue-fill: var(--pink-fill); }
 .hue-won                        { --hue: var(--deep-ink); --hue-bg: var(--deep);    --hue-fill: var(--won-fill); }
 .hue-lost, .hue-wrong_number    { --hue: var(--gray);   --hue-bg: var(--gray-bg);   --hue-fill: var(--gray-fill); }
-/* Complex job: lime tag in brand colors, separate from status */
-.tag-complex { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 1px 8px; border-radius: 99px; background: var(--lime); color: #123f38; font: 600 11px var(--f-body); letter-spacing: .02em; vertical-align: 2px; white-space: nowrap; }
-.tag-complex::before { content: ""; width: 6px; height: 6px; border: 1.5px solid currentColor; border-radius: 1px; transform: rotate(45deg); }
-.meta .tag-complex { margin-left: 0; vertical-align: 0; }
-.btn.toggle b { font: 500 11px var(--f-mono); padding: 0 6px; border-radius: 99px; background: var(--surface-2); }
-.btn.toggle[aria-pressed="true"] { background: var(--lime); border-color: var(--lime); color: #123f38; }
-.btn.toggle[aria-pressed="true"] b { background: rgb(18 63 56 / .12); }
-.switch { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-sm); background: var(--surface); cursor: pointer; }
-.switch input { position: absolute; opacity: 0; pointer-events: none; }
-.switch-ui { flex: none; width: 40px; height: 24px; border-radius: 99px; background: var(--surface-2); position: relative; transition: background .15s; }
-.switch-ui::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .15s; }
-.switch input:checked + .switch-ui { background: var(--deep); }
-.switch input:checked + .switch-ui::after { transform: translateX(16px); background: var(--lime); }
-.switch input:focus-visible + .switch-ui { outline: 2px solid var(--focus); outline-offset: 2px; }
-.switch b { display: block; font-weight: 600; font-size: 14px; }
-.switch small { display: block; color: var(--ink-3); font-size: 12px; }
-.complex-link { display: flex; align-items: center; gap: 10px; margin: -4px 0 12px; padding: 8px 10px; border-radius: 12px; background: var(--bg); color: var(--ink); text-decoration: none; font-size: 13px; font-weight: 500; }
-.complex-link .tag-complex { margin: 0; }
-.complex-link span:nth-child(2) { flex: 1; }
-.complex-link:hover { background: var(--surface-2); }
 .due { font: 500 12px var(--f-mono); color: var(--ink-2); white-space: nowrap; }
 .due.overdue { color: var(--overdue); }
 .due.today { color: var(--accent); }
