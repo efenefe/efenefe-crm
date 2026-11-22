@@ -6,7 +6,7 @@ Runs on Cloudflare: one Worker serves the screens and the API, D1 stores the dat
 
 ## Screens
 
-- **Today**: overdue follow-ups, due today, next 7 days, and a count of leads per status.
+- **Today**: a dashboard with follow-ups due, new leads to call, calls this week and clients won, plus the next call, the pipeline and your best prospects.
 - **Call list**: follow-ups due, then new leads (weak websites first). Log the outcome, note, status and next follow-up, then move to the next lead.
 - **Leads**: every lead, with search, filters and sorting.
 - **Find leads**: Google search by category and city. Each result's website is checked and flagged: weak website, no website, social page only, or good website.

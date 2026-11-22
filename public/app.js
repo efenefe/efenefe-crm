@@ -33,6 +33,8 @@ const state = {
   callIndex: 0,
   callFocus: false,
   panel: null, // { id } or { id: null } for new
+  stats: null,
+  statsLoading: false,
 };
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -181,41 +183,163 @@ function leadRow(l, { showDue = true } = {}) {
   </li>`;
 }
 
+const ICON = {
+  bell: '<svg viewBox="0 0 20 20"><path d="M5 14V9a5 5 0 0 1 10 0v5l1.5 2h-13zM8.5 18h3"/></svg>',
+  user: '<svg viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/></svg>',
+  phone: '<svg viewBox="0 0 20 20"><path d="M6 3l2 4-2 1.5a9 9 0 0 0 5.5 5.5L13 12l4 2-1 3c-6.5 0-13-6.5-13-13z"/></svg>',
+  trophy: '<svg viewBox="0 0 20 20"><path d="M6 3h8v4a4 4 0 0 1-8 0zM6 5H3.5a2.5 2.5 0 0 0 2.7 3M14 5h2.5a2.5 2.5 0 0 1-2.7 3M10 11v3M7 17h6M8 14h4v3H8z"/></svg>',
+  go: '<svg viewBox="0 0 14 14"><path d="M4 10l6-6M5 4h5v5"/></svg>',
+};
+
+function firstName() {
+  const local = (state.me || "").split("@")[0].split(/[._\-+0-9]/)[0];
+  return /^[a-z]{2,}$/i.test(local) ? local[0].toUpperCase() + local.slice(1).toLowerCase() : "";
+}
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? "Working late" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+// Calls per local day for the last 14 days, oldest first. Index 13 is today.
+function callDays() {
+  const days = Array(14).fill(0);
+  const start = parseYmd(addDays(-13));
+  for (const c of state.stats?.calls || []) {
+    const d = new Date(c.called_at);
+    const i = Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - start) / 864e5);
+    if (i >= 0 && i < 14) days[i]++;
+  }
+  return days;
+}
+async function loadStats() {
+  state.statsLoading = true;
+  try {
+    state.stats = await api("GET", "stats");
+  } catch {
+    state.stats = { calls: [], failed: true };
+  }
+  state.statsLoading = false;
+  if (state.view === "today") renderToday();
+}
+
+function statTile({ href, status, icon, accent, label, num, foot, spark = "" }) {
+  return `<a class="card stat" href="${href}" ${status ? `data-status="${status}"` : ""}>
+    <div class="stat-top"><span class="badge ${accent ? "accent" : ""}">${ICON[icon]}</span><span class="stat-label">${label}</span></div>
+    <span class="stat-go" aria-hidden="true">${ICON.go}</span>
+    <div class="stat-num">${num}</div>
+    <div class="stat-foot"><span>${foot}</span>${spark}</div>
+  </a>`;
+}
+
 function renderToday() {
+  if (!state.stats && !state.statsLoading) loadStats();
   const t = today();
   const in7 = addDays(7);
+  const weekAgo = addDays(-7);
   const open = state.leads.filter((l) => !CLOSED.has(l.status) && l.next_follow_up);
   const overdue = open.filter((l) => l.next_follow_up < t).sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up));
   const due = open.filter((l) => l.next_follow_up === t);
   const soon = open.filter((l) => l.next_follow_up > t && l.next_follow_up <= in7).sort((a, b) => a.next_follow_up.localeCompare(b.next_follow_up));
   const toCall = newToCall();
+  const queue = callQueue();
+  const dueCount = overdue.length + due.length;
+  const addedThisWeek = state.leads.filter((l) => l.created_at && ymd(new Date(l.created_at)) > weekAgo).length;
 
-  const counts = Object.keys(STATUS).map((s) => [s, state.leads.filter((l) => l.status === s).length]);
-  const dateTitle = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const days = callDays();
+  const thisWeek = days.slice(7).reduce((a, b) => a + b, 0);
+  const lastWeek = days.slice(0, 7).reduce((a, b) => a + b, 0);
+  const diff = thisWeek - lastWeek;
+  const peak = Math.max(1, ...days.slice(7));
+  const spark = `<span class="spark" aria-hidden="true">${days.slice(7).map((n) => `<i class="${n ? "on" : ""}" style="height:${Math.max(12, (n / peak) * 100)}%"></i>`).join("")}</span>`;
+  const won = state.leads.filter((l) => l.status === "won").length;
+  const warm = state.leads.filter((l) => l.status === "interested" || l.status === "proposal").length;
 
-  const section = (title, list, cls, emptyText) => `
-    <section class="section ${cls}">
-      <div class="section-head"><h2>${title}</h2><span class="count">${list.length}</span></div>
-      ${list.length ? `<ul class="rows">${list.map((l) => leadRow(l)).join("")}</ul>` : `<div class="empty">${emptyText}</div>`}
+  const name = firstName();
+  const dateLine = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const summary = state.leads.length === 0
+    ? "Your tracker is empty. Find businesses to call, or add one by hand."
+    : `${dueCount ? `${dueCount} follow-up${dueCount === 1 ? " needs" : "s need"} you today.` : "No follow-ups due today."}${toCall.length ? ` ${toCall.length} new lead${toCall.length === 1 ? "" : "s"} waiting for a first call.` : ""}`;
+
+  const group = (title, list, cls) => list.length ? `
+    <div class="group ${cls}">
+      <div class="group-head">${title}<span class="count">${list.length}</span></div>
+      <ul class="rows">${list.map((l) => leadRow(l)).join("")}</ul>
+    </div>` : "";
+
+  const followCard = `
+    <section class="card">
+      <div class="card-head"><h2>Follow-ups</h2><a class="link" href="#leads">All leads →</a></div>
+      ${state.leads.length === 0
+        ? `<div class="empty"><b>No leads yet.</b> Search Google with <a href="#find">Find leads</a>, or add one with the + button.</div>`
+        : overdue.length + due.length + soon.length
+          ? group("Overdue", overdue, "overdue") + group("Due today", due, "") + group("Next 7 days", soon, "")
+          : `<div class="empty"><b>Nothing scheduled this week.</b> Follow-ups you set when logging a call show up here.</div>`}
     </section>`;
 
+  const next = queue[0];
+  const nextCard = next ? `
+    <section class="card next-call">
+      <div class="card-head"><h2>Next call</h2><span class="link">${queue.length} in queue</span></div>
+      <div class="who">${esc(next.business)}</div>
+      <div class="why">${next.next_follow_up && next.next_follow_up <= t ? `Follow-up ${esc(dueLabel(next.next_follow_up).toLowerCase())}` : esc(["New lead", next.category, next.city].filter(Boolean).join(" · "))}</div>
+      <div class="meta">${flagChip(next.site_flag)}</div>
+      ${next.phone ? `<a class="phone-link" href="${esc(telHref(next.phone))}">${esc(next.phone)}</a>` : `<p class="why" style="margin:16px 0">No phone number yet.</p>`}
+      <a class="btn primary" href="#calls">Start calling</a>
+    </section>` : `
+    <section class="card next-call">
+      <div class="card-head"><h2>Next call</h2></div>
+      <div class="who">You're all caught up.</div>
+      <div class="why">No follow-ups due and no new leads to call.</div>
+      <a class="btn primary" href="#find" style="margin-top:18px">Find leads</a>
+    </section>`;
+
+  const counts = Object.keys(STATUS).map((s) => [s, state.leads.filter((l) => l.status === s).length]);
+  const max = Math.max(1, ...counts.map(([, n]) => n));
+  const pipeCard = `
+    <section class="card">
+      <div class="card-head"><h2>Pipeline</h2><span class="count">${state.leads.length}</span></div>
+      <ul class="bars">${counts.map(([s, n]) => `<li><a href="#leads" data-status="${s}" class="${n ? "" : "zero"}"><span>${STATUS[s]}</span><span class="track"><span class="fill" style="width:${(n / max) * 100}%"></span></span><b>${n}</b></a></li>`).join("")}</ul>
+    </section>`;
+
+  const best = toCall.filter((l) => l.site_flag === "weak" || l.site_flag === "none" || l.site_flag === "social").slice(0, 5);
+  const bestCard = best.length ? `
+    <section class="card">
+      <div class="card-head"><h2>Best prospects</h2><a class="link" href="#leads" data-status="to_call">See all →</a></div>
+      <ul class="rows compact">${best.map((l) => `<li class="row" data-open="${esc(l.id)}" tabindex="0"><span class="name">${esc(l.business)}<span class="sub">${esc(l.city || l.category || "")}</span></span>${flagChip(l.site_flag)}</li>`).join("")}</ul>
+    </section>` : "";
+
   main.innerHTML = `
-    <div class="page-head">
-      <div><h1>${esc(dateTitle)}</h1>
-      <p>${overdue.length + due.length ? `${overdue.length + due.length} follow-up${overdue.length + due.length === 1 ? " needs" : "s need"} you today.` : "No follow-ups due today."}${toCall.length ? ` ${toCall.length} new lead${toCall.length === 1 ? "" : "s"} waiting for a first call.` : ""}</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div class="hello">
+      <div>
+        <p class="eyebrow">${esc(dateLine)}</p>
+        <h1>${greeting()}${name ? `, ${esc(name)}` : ""}</h1>
+        <p>${summary}</p>
+      </div>
+      <div class="head-actions">
         <button class="btn" data-new>Add lead</button>
-        <a class="btn primary" href="#calls">Start calling</a>
+        <a class="btn dark" href="#calls">Start calling</a>
       </div>
     </div>
-    <nav class="pipeline" aria-label="Leads by status">
-      ${counts.map(([s, n]) => `<a href="#leads" data-status="${s}" class="${n ? "" : "zero"}"><b>${n}</b><span>${STATUS[s]}</span></a>`).join("")}
-    </nav>
-    ${state.leads.length === 0 ? `<div class="empty"><b>No leads yet.</b> Add your first business with <b>Add lead</b>. Or find businesses with <b>Find leads</b>.</div>` : `
-      ${overdue.length ? section("Overdue", overdue, "overdue", "") : ""}
-      ${section("Due today", due, "", "Nothing due today.")}
-      ${section("Next 7 days", soon, "", "No follow-ups scheduled this week.")}
-    `}`;
+    <div class="dash">
+      <div class="dash-main">
+        <div class="stats">
+          ${statTile({ href: "#calls", icon: "bell", accent: dueCount > 0, label: "Follow-ups due", num: dueCount,
+            foot: overdue.length ? `<span class="delta bad">${overdue.length} overdue</span>` : `<span class="delta">${soon.length} this week</span>` })}
+          ${statTile({ href: "#calls", icon: "user", label: "New leads to call", num: toCall.length,
+            foot: addedThisWeek ? `<span class="delta up">+${addedThisWeek}</span> added this week` : "None added this week" })}
+          ${statTile({ href: "#leads", icon: "phone", label: "Calls this week", num: state.stats ? thisWeek : "–",
+            foot: state.stats && !state.stats.failed ? `<span class="delta ${diff > 0 ? "up" : ""}">${diff > 0 ? "↑" : diff < 0 ? "↓" : ""}${diff ? Math.abs(diff) : "Same"}</span> vs last week` : "", spark: state.stats ? spark : "" })}
+          ${statTile({ href: "#leads", status: "won", icon: "trophy", accent: won > 0, label: "Clients won", num: won,
+            foot: warm ? `<span class="delta up">${warm} warm</span> interested or proposal` : "No warm leads yet" })}
+        </div>
+        ${followCard}
+      </div>
+      <aside class="rail">
+        ${nextCard}
+        ${pipeCard}
+        ${bestCard}
+      </aside>
+    </div>`;
 }
 
 function renderCalls() {
@@ -243,8 +367,8 @@ function renderCalls() {
     <div class="page-head"><div><h1>Call list</h1><p>${queue.length} to call: follow-ups first, then new leads with weak websites first.</p></div></div>
     <div class="calls ${state.callFocus ? "focus" : ""}">
       <div class="queue">
-        ${dueList.length ? `<div class="section-head"><h2>Follow-ups due</h2><span class="count">${dueList.length}</span></div><ul class="rows" style="margin-bottom:16px">${dueList.map((l) => item(l, queue.indexOf(l))).join("")}</ul>` : ""}
-        ${newList.length ? `<div class="section-head"><h2>New leads</h2><span class="count">${newList.length}</span></div><ul class="rows">${newList.map((l) => item(l, queue.indexOf(l))).join("")}</ul>` : ""}
+        ${dueList.length ? `<div><div class="section-head"><h2>Follow-ups due</h2><span class="count">${dueList.length}</span></div><ul class="rows">${dueList.map((l) => item(l, queue.indexOf(l))).join("")}</ul></div>` : ""}
+        ${newList.length ? `<div><div class="section-head"><h2>New leads</h2><span class="count">${newList.length}</span></div><ul class="rows">${newList.map((l) => item(l, queue.indexOf(l))).join("")}</ul></div>` : ""}
       </div>
       <div>
         <button class="btn ghost small show-phone" data-unfocus style="margin-bottom:8px">← All ${queue.length} calls</button>
@@ -259,7 +383,7 @@ function callCard(l) {
   return `
     <div class="card-head">
       <div style="min-width:0">
-        <h2>${esc(l.business)}</h2>
+        <h2 class="big">${esc(l.business)}</h2>
         <div class="meta">${flagChip(l.site_flag)} ${statusChip(l.status)} ${l.next_follow_up ? `<span class="due ${dueClass(l.next_follow_up)}">Follow-up ${esc(dueLabel(l.next_follow_up).toLowerCase())}</span>` : ""}</div>
       </div>
       <button class="btn small" data-open="${esc(l.id)}">Edit lead</button>
@@ -267,11 +391,11 @@ function callCard(l) {
     <div class="dial">
       ${l.phone ? `<a class="phone-big" href="${esc(tel)}">${esc(l.phone)}</a>
         <a class="btn primary small" href="${esc(tel)}">Call</a>
-        <button class="btn small" data-copy="${esc(l.phone)}">Copy</button>` : `<span style="color:var(--ink-3)">No phone number. Add one with Edit lead.</span>`}
+        <button class="btn small" data-copy="${esc(l.phone)}">Copy</button>` : `<span class="none">No phone number. Add one with Edit lead.</span>`}
     </div>
     ${facts(l)}
     ${logForm(l, { next: true })}
-    <div style="margin-top:22px"><h3 style="font-size:15px;margin-bottom:10px">Call history</h3><div data-history="${esc(l.id)}"><span style="color:var(--ink-3);font-size:14px">Loading…</span></div></div>`;
+    <div class="history-box"><h3 class="history-title">Call history</h3><div data-history="${esc(l.id)}"><span class="muted">Loading…</span></div></div>`;
 }
 
 function facts(l) {
@@ -345,6 +469,7 @@ function bindLogForm(root, lead, { next }) {
         next_follow_up: form.next.value || null,
       });
       upsertLead(updated);
+      state.stats = null;
       toast(`Logged: ${OUTCOME[outcome]}`);
       if (next) {
         // The saved lead may have left the queue; stay on the same position so the next lead shows.
@@ -374,7 +499,7 @@ async function loadHistory(root, id) {
           const w = when(c.called_at);
           return `<li><span class="date">${esc(w.date)}<br>${esc(w.time)}</span><div><span class="what">${esc(OUTCOME[c.outcome] || c.outcome)}</span>${c.note ? `<p>${esc(c.note)}</p>` : ""}</div></li>`;
         }).join("")}</ul>`
-      : `<span style="color:var(--ink-3);font-size:14px">No calls logged yet.</span>`;
+      : `<span class="muted">No calls logged yet.</span>`;
   } catch (err) {
     box.textContent = err.message;
   }
@@ -421,6 +546,8 @@ function renderLeads() {
   main.innerHTML = `
     <div class="page-head"><div><h1>Leads</h1><p>${state.leads.length} business${state.leads.length === 1 ? "" : "es"} in your tracker.</p></div>
       <button class="btn primary" data-new>Add lead</button></div>
+    <section class="card table-card">
+    <div class="card-head"><h2>${f.status === "open" ? "Open leads" : f.status === "all" ? "All leads" : esc(STATUS[f.status])}<span class="count">${list.length}</span></h2>
     <div class="toolbar">
       <input class="input search" id="lead-search" type="search" placeholder="Search name, phone, city…" value="${esc(f.q)}" aria-label="Search leads">
       <select class="input" id="lead-status" aria-label="Status">
@@ -431,22 +558,22 @@ function renderLeads() {
         <option value="all">Any website</option>
         ${Object.entries(FLAG).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
       </select>
-    </div>
+    </div></div>
     ${selBar}
     ${list.length ? `
     <div class="table-wrap"><table class="leads">
       <thead><tr><th class="sel-cell"><input type="checkbox" class="pick" data-lsel-all ${allShownSelected ? "checked" : ""} aria-label="Select all shown"></th>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
       <tbody>${list.map((l) => `<tr data-open="${esc(l.id)}" tabindex="0" ${state.leadSel.has(l.id) ? 'class="selected"' : ""}>
         <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
-        <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span style="font-size:13px;color:var(--ink-2)">${esc(l.category)}</span>` : ""}</td>
+        <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
         <td>${flagChip(l.site_flag)}</td>
         <td class="hide-phone phone">${esc(l.phone || "")}</td>
         <td class="hide-phone">${esc(l.city || "")}</td>
         <td>${statusChip(l.status)}</td>
         <td>${dueChip(l.next_follow_up)}</td>
       </tr>`).join("")}</tbody>
-    </table></div>
-    <p class="result-count">${list.length} shown</p>` : `<div class="empty">${state.leads.length ? "No leads match these filters." : "<b>No leads yet.</b> Add your first one with <b>Add lead</b>."}</div>`}`;
+    </table></div>` : `<div class="empty">${state.leads.length ? "No leads match these filters." : "<b>No leads yet.</b> Add your first one with <b>Add lead</b>."}</div>`}
+    </section>`;
 
   $("#lead-status").value = f.status;
   $("#lead-flag").value = f.flag;
@@ -476,12 +603,14 @@ function saveSearch() {
 function renderFind() {
   main.innerHTML = `
     <div class="page-head"><div><h1>Find leads</h1><p>Search Google by business category and city. Weak websites come first.</p></div></div>
+    <section class="card search-card">
     <form class="search-form" id="find-form" novalidate>
       <label class="field">Category<input class="input" id="find-category" name="category" placeholder="Dentists" value="${esc(find.category)}" autocomplete="off"></label>
       <label class="field">City<input class="input" id="find-city" name="city" placeholder="Mississauga" value="${esc(find.city)}"></label>
       <button class="btn primary" type="submit" ${find.loading ? "disabled" : ""}>${find.loading ? "Searching…" : "Search"}</button>
     </form>
     <p class="hint">Each search uses up to 3 of your 1,000 free Google requests a month and returns up to 60 businesses.</p>
+    </section>
     <div id="find-results"></div>`;
   $("#find-form").addEventListener("submit", runSearch);
   renderFindResults();
@@ -499,7 +628,7 @@ function renderFindResults() {
     return;
   }
   if (!find.data) {
-    box.innerHTML = `<div class="soon"><h2>How results are flagged</h2>
+    box.innerHTML = `<div class="card soon"><h2>How results are flagged</h2>
       <p>Each business gets one flag, so you know who needs a website most.</p>
       <div class="legend">${flagChip("weak")}${flagChip("none")}${flagChip("social")}${flagChip("good")}</div></div>`;
     return;
@@ -529,7 +658,7 @@ function renderFindResults() {
           ${r.site_issues?.length && r.site_flag === "weak" ? `<span class="issues">${r.site_issues.map((i) => `<span>${esc(i)}</span>`).join("")}</span>` : ""}
         </div>
       </div>
-      <div class="result-phone phone">${r.phone ? esc(r.phone) : `<span style="color:var(--ink-3)">No phone</span>`}</div>
+      <div class="result-phone phone">${r.phone ? esc(r.phone) : `<span class="muted">No phone</span>`}</div>
       <div class="result-act">${r.in_tracker ? `<span class="status">In tracker</span>` : `<button class="btn small" data-add="${esc(r.place_id)}">Add</button>`}</div>
     </li>`;
 
@@ -658,7 +787,7 @@ function openPanel(id) {
       <button class="btn ghost small" data-close aria-label="Close">Close</button>
     </div>
     <div class="panel-body">
-      ${lead && lead.phone ? `<div class="dial" style="margin:0"><a class="phone-big" href="${esc(telHref(lead.phone))}">${esc(lead.phone)}</a><button class="btn small" data-copy="${esc(lead.phone)}">Copy</button></div>` : ""}
+      ${lead && lead.phone ? `<div class="dial"><a class="phone-big" href="${esc(telHref(lead.phone))}">${esc(lead.phone)}</a><button class="btn small" data-copy="${esc(lead.phone)}">Copy</button></div>` : ""}
       <form class="form" id="lead-form" novalidate>
         <label class="field">Business name *<input class="input" name="business" id="f-business" required value="${v("business")}"></label>
         <div class="grid-2">
@@ -688,9 +817,9 @@ function openPanel(id) {
           <button type="submit" class="btn primary">${lead ? "Save changes" : "Add lead"}</button>
         </div>
       </form>
-      ${lead ? `<div class="card" style="padding:16px">${logForm(lead, { next: false })}</div>
-      <section><h3 style="font-size:15px;margin-bottom:10px">Call history</h3><div data-history="${esc(lead.id)}"><span style="color:var(--ink-3);font-size:14px">Loading…</span></div></section>
-      <p style="font-size:12px;color:var(--ink-3);margin:0">Added ${esc(when(lead.created_at).date)}${lead.source && lead.source !== "manual" ? ` from ${esc(lead.source)}` : ""}.</p>` : ""}
+      ${lead ? `<div class="card">${logForm(lead, { next: false })}</div>
+      <section class="card"><h3 class="history-title">Call history</h3><div data-history="${esc(lead.id)}"><span class="muted">Loading…</span></div></section>
+      <p class="added">Added ${esc(when(lead.created_at).date)}${lead.source && lead.source !== "manual" ? ` from ${esc(lead.source)}` : ""}.</p>` : ""}
     </div>`;
   p.hidden = false;
   $("#scrim").hidden = false;
@@ -827,8 +956,8 @@ document.addEventListener("click", async (e) => {
     return renderLeads();
   }
 
-  const pipe = t.closest("[data-status]");
-  if (pipe && pipe.closest(".pipeline")) {
+  const pipe = t.closest("a[data-status]");
+  if (pipe) {
     state.leadsFilter.status = pipe.dataset.status;
     state.leadsFilter.flag = "all";
     state.leadsFilter.q = "";
@@ -869,7 +998,9 @@ async function boot() {
     const [{ leads }, me] = await Promise.all([api("GET", "leads"), api("GET", "me").catch(() => ({}))]);
     state.leads = leads;
     state.me = me.email || "";
-    $("#me").textContent = state.me ? `Signed in as ${state.me}` : "";
+    const av = $("#me");
+    av.textContent = (state.me || "?")[0];
+    av.title = state.me ? `Signed in as ${state.me}` : "";
     setView(location.hash.slice(1) || "today");
   } catch (err) {
     main.innerHTML = `<div class="empty"><b>Couldn't load your leads.</b> ${esc(err.message)}</div>`;
