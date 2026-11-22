@@ -425,6 +425,9 @@ table.leads tr.selected td { background: var(--accent-soft); }
 .results-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
 .result { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 13px 12px; border-radius: var(--r-sm); }
+.result { transition: background-color .12s ease; }
+.result:hover { background: var(--bg); }
+.result:hover::before, .result:hover + .result::before { border-color: transparent; }
 .result.tracked { opacity: .6; }
 .pick { width: 18px; height: 18px; accent-color: var(--accent); }
 .result-name { font-weight: 600; }
@@ -505,4 +508,4 @@ table.leads tr.selected td { background: var(--accent-soft); }
   .brand-sub { display: none; }
 }
 @media (min-width: 821px) { .show-phone { display: none !important; } }
-@media (prefers-reduced-motion: reduce) { .panel { animation: none; } a.stat, .nav { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .panel { animation: none; } a.stat, .nav, .result { transition: none; } }
