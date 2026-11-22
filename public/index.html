@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>efenefe CRM</title>
+  <meta name="theme-color" content="#f3f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <nav class="nav" aria-label="Main">
+      <div class="brand"><span class="brand-mark">efenefe</span><span class="brand-sub">calls</span></div>
+      <a href="#today" data-view="today"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12v12H4zM4 8h12M8 2v4M12 2v4"/></svg><span>Today</span></a>
+      <a href="#calls" data-view="calls"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3l2 4-2 1.5a9 9 0 0 0 5.5 5.5L13 12l4 2-1 3c-6.5 0-13-6.5-13-13z"/></svg><span>Call list</span><b class="nav-count" id="calls-count" hidden></b></a>
+      <a href="#leads" data-view="leads"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14"/></svg><span>Leads</span></a>
+      <a href="#find" data-view="find"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13 13l4 4"/></svg><span>Find leads</span></a>
+      <div class="nav-foot" id="me"></div>
+    </nav>
+
+    <main class="main" id="main" tabindex="-1">
+      <div class="loading" id="loading">Loading your leads…</div>
+    </main>
+  </div>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="panel" id="panel" aria-label="Lead details" hidden></aside>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

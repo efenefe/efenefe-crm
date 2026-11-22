@@ -1,0 +1,12 @@
+{
+  "name": "efenefe-crm",
+  "private": true,
+  "description": "Personal call tracker for efenefe: leads, calls, follow-ups.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.166.0"
+  }
+}
