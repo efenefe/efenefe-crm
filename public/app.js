@@ -992,6 +992,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("hashchange", () => setView(location.hash.slice(1)));
+const topBar = $(".top");
+const onScroll = () => topBar.classList.toggle("scrolled", window.scrollY > 4);
+window.addEventListener("scroll", onScroll, { passive: true });
+onScroll();
 
 async function boot() {
   try {
