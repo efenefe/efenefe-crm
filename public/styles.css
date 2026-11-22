@@ -90,9 +90,9 @@ h1, h2, h3 { font-family: var(--f-display); letter-spacing: -.015em; margin: 0; 
 /* Sticky header: stays on top while you scroll. The canvas color behind it hides content passing under. */
 /* Header scrolls away with the page; only the pill nav stays pinned (fixed, centered over the header's middle column). */
 .top { display: grid; grid-template-columns: 1fr auto 1fr; grid-template-rows: 50px; align-items: center; gap: 16px; margin: 0 0 24px; padding: 14px 0; }
-.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--brand); text-decoration: none; justify-self: start; }
+.brand { display: inline-flex; align-items: flex-end; gap: 10px; color: var(--brand); text-decoration: none; justify-self: start; }
 .logo { height: 24px; width: auto; display: block; }
-.brand-sub { font: 500 11px var(--f-mono); letter-spacing: .08em; color: var(--ink-3); border: 1px solid var(--line); border-radius: 99px; padding: 1px 8px; }
+.brand-sub { display: block; font: 600 11px/16px var(--f-mono); letter-spacing: .08em; color: #123f38; background: var(--lime); border-radius: 99px; padding: 0 8px; }
 
 .nav {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 15;
