@@ -999,7 +999,6 @@ async function boot() {
     state.leads = leads;
     state.me = me.email || "";
     const av = $("#me");
-    av.textContent = (state.me || "?")[0];
     av.title = state.me ? `Signed in as ${state.me}` : "";
     setView(location.hash.slice(1) || "today");
   } catch (err) {
