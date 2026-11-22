@@ -28,6 +28,8 @@ const state = {
   me: "",
   view: "today",
   leadsFilter: { q: "", status: "open", flag: "all", sort: "next_follow_up", dir: "asc" },
+  leadSel: new Set(),
+  moveConfirm: false,
   callIndex: 0,
   callFocus: false,
   panel: null, // { id } or { id: null } for new
@@ -401,7 +403,21 @@ function renderLeads() {
 
   const th = (k, label, cls = "") => `<th class="${cls}" ${f.sort === k ? `aria-sort="${f.dir === "asc" ? "ascending" : "descending"}"` : ""}><button type="button" data-sort="${k}">${label}</button></th>`;
   const hadFocus = document.activeElement?.id === "lead-search";
+  for (const id of state.leadSel) if (!state.leads.some((l) => l.id === id)) state.leadSel.delete(id);
+  const sel = [...state.leadSel];
+  const allShownSelected = list.length > 0 && list.every((l) => state.leadSel.has(l.id));
+  const manual = sel.filter((id) => !state.leads.find((l) => l.id === id)?.place_id).length;
+  const selBar = !sel.length ? "" : state.moveConfirm ? `
+    <div class="sel-bar warn">
+      <span>Move ${sel.length} lead${sel.length === 1 ? "" : "s"} back to Find leads? ${sel.length === 1 ? "It leaves" : "They leave"} your tracker and call history is deleted.${manual ? ` ${manual} added by hand ${manual === 1 ? "isn't" : "aren't"} from a search, so ${manual === 1 ? "it is" : "they are"} just deleted.` : ""}</span>
+      <span class="sel-actions"><button class="btn small danger" data-move-yes>Move back</button><button class="btn small ghost" data-move-no>Cancel</button></span>
+    </div>` : `
+    <div class="sel-bar">
+      <span><b>${sel.length}</b> selected</span>
+      <span class="sel-actions"><button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
+    </div>`;
 
+  state.shownLeadIds = list.map((l) => l.id);
   main.innerHTML = `
     <div class="page-head"><div><h1>Leads</h1><p>${state.leads.length} business${state.leads.length === 1 ? "" : "es"} in your tracker.</p></div>
       <button class="btn primary" data-new>Add lead</button></div>
@@ -416,10 +432,12 @@ function renderLeads() {
         ${Object.entries(FLAG).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
       </select>
     </div>
+    ${selBar}
     ${list.length ? `
     <div class="table-wrap"><table class="leads">
-      <thead><tr>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
-      <tbody>${list.map((l) => `<tr data-open="${esc(l.id)}" tabindex="0">
+      <thead><tr><th class="sel-cell"><input type="checkbox" class="pick" data-lsel-all ${allShownSelected ? "checked" : ""} aria-label="Select all shown"></th>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
+      <tbody>${list.map((l) => `<tr data-open="${esc(l.id)}" tabindex="0" ${state.leadSel.has(l.id) ? 'class="selected"' : ""}>
+        <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
         <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span style="font-size:13px;color:var(--ink-2)">${esc(l.category)}</span>` : ""}</td>
         <td>${flagChip(l.site_flag)}</td>
         <td class="hide-phone phone">${esc(l.phone || "")}</td>
@@ -603,6 +621,29 @@ async function addResults(ids) {
   if (added) toast(added === 1 ? `Added ${items[0].business} to your call list` : `Added ${added} leads to your call list`);
 }
 
+async function moveBack(ids) {
+  let moved = 0;
+  for (const id of ids) {
+    const lead = state.leads.find((l) => l.id === id);
+    if (!lead) continue;
+    try {
+      await api("DELETE", `leads/${id}`);
+      state.leads = state.leads.filter((l) => l.id !== id);
+      state.leadSel.delete(id);
+      const r = find.data?.results.find((x) => x.place_id && x.place_id === lead.place_id);
+      if (r) r.in_tracker = false;
+      moved++;
+    } catch (err) {
+      toast(err.message, true);
+      break;
+    }
+  }
+  state.moveConfirm = false;
+  saveSearch();
+  render();
+  if (moved) toast(`Moved ${moved} lead${moved === 1 ? "" : "s"} back. ${moved === 1 ? "It shows" : "They show"} in Find leads again.`);
+}
+
 // ---------- panel ----------
 
 function openPanel(id) {
@@ -643,7 +684,7 @@ function openPanel(id) {
         </div>
         <label class="field">Notes<textarea class="input" name="notes" id="f-notes">${v("notes")}</textarea></label>
         <div class="form-actions">
-          <span>${lead ? `<button type="button" class="btn ghost danger small" data-delete>Delete lead</button>` : ""}</span>
+          <span>${lead ? `${lead.place_id ? `<button type="button" class="btn ghost small" data-move-one="${esc(lead.id)}">Move back to Find leads</button>` : ""}<button type="button" class="btn ghost danger small" data-delete>Delete lead</button>` : ""}</span>
           <button type="submit" class="btn primary">${lead ? "Save changes" : "Add lead"}</button>
         </div>
       </form>
@@ -702,6 +743,30 @@ function closePanel() {
 
 document.addEventListener("click", async (e) => {
   const t = e.target;
+  const lsel = t.closest("[data-lsel]");
+  if (lsel) {
+    if (lsel.checked) state.leadSel.add(lsel.dataset.lsel);
+    else state.leadSel.delete(lsel.dataset.lsel);
+    state.moveConfirm = false;
+    return renderLeads();
+  }
+  const lall = t.closest("[data-lsel-all]");
+  if (lall) {
+    for (const id of state.shownLeadIds || []) lall.checked ? state.leadSel.add(id) : state.leadSel.delete(id);
+    state.moveConfirm = false;
+    return renderLeads();
+  }
+  if (t.closest(".sel-cell")) return; // clicks around the checkbox don't open the lead
+  if (t.closest("[data-sel-clear]")) { state.leadSel.clear(); state.moveConfirm = false; return renderLeads(); }
+  if (t.closest("[data-move-back]")) { state.moveConfirm = true; return renderLeads(); }
+  if (t.closest("[data-move-no]")) { state.moveConfirm = false; return renderLeads(); }
+  if (t.closest("[data-move-yes]")) { t.closest("[data-move-yes]").disabled = true; return moveBack([...state.leadSel]); }
+  const one = t.closest("[data-move-one]");
+  if (one) {
+    one.disabled = true;
+    closePanel();
+    return moveBack([one.dataset.moveOne]);
+  }
   const open = t.closest("[data-open]");
   if (open) return openPanel(open.dataset.open);
   if (t.closest("[data-new]")) return openPanel(null);

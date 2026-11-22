@@ -171,6 +171,11 @@ table.leads tr:last-child td { border-bottom: 0; }
 table.leads tbody tr { cursor: pointer; }
 table.leads tbody tr:hover { background: var(--surface-2); }
 table.leads .name { font-weight: 600; }
+.sel-cell { width: 36px; padding-right: 0 !important; }
+table.leads tr.selected { background: var(--accent-soft); }
+.sel-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px; border-radius: var(--r); background: var(--accent-soft); font-size: 14px; }
+.sel-bar.warn { background: var(--none-bg); color: var(--ink); }
+.sel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .result-count { font-size: 13px; color: var(--ink-3); margin: 10px 2px 0; }
 
 /* ---------- call list ---------- */
