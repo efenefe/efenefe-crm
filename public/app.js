@@ -225,6 +225,9 @@ setInterval(() => {
   for (const el of document.querySelectorAll("[data-since]")) el.textContent = elapsed(el.dataset.since);
 }, 1000);
 
+// A failed audit whose reason is the site itself not answering, as opposed to an error in the audit.
+const isUnreachable = (r) => r?.status === "failed" && /down or unreachable/i.test(r.error || "");
+
 // Small audit state shown next to the website flag.
 function auditMini(leadId) {
   const a = auditOf(leadId);
@@ -233,6 +236,7 @@ function auditMini(leadId) {
   if (s === "queued") return `<span class="audit-state queued">Queued</span>`;
   if (s === "running") return `<span class="audit-state busy">${SPINNER}Auditing…</span>`;
   if (a.done) return scorePill(a.done.score);
+  if (isUnreachable(a.latest)) return `<span class="audit-state offline" title="The site didn't respond when it was tested">Site unreachable</span>`;
   if (s === "failed") return `<span class="audit-state bad" title="${esc(a.latest.error || "")}">Audit failed</span>`;
   if (s === "skipped") return `<span class="audit-state" title="${esc(a.latest.error || "")}">Not audited</span>`;
   return "";
@@ -317,6 +321,8 @@ function reportBox(leadId) {
       <div class="progress-track ${running ? "" : "waiting"}" aria-hidden="true"><span></span></div>
       <p class="muted">${running ? "Google is loading the site on a phone, then the 3 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
     </div>`;
+  } else if (isUnreachable(latest) && !done) {
+    bodyHtml = `<p class="audit-note"><span class="audit-state offline">Site unreachable</span> The site didn't respond when it was tested, so there is nothing to audit. Open it in a browser to check, then run the audit again.</p>`;
   } else if (latest?.status === "failed" && !done) {
     bodyHtml = `<p class="audit-note"><span class="audit-state bad">Audit failed</span> ${esc(latest.error || "")}</p>`;
   } else if (latest?.status === "skipped" && !done) {
@@ -1088,7 +1094,7 @@ function openPanel(id) {
           <label class="field">Phone<input class="input" name="phone" id="f-phone" type="tel" value="${v("phone")}"></label>
           <label class="field">Email<input class="input" name="email" id="f-email" type="email" value="${v("email")}"></label>
         </div>
-        <label class="field">Website<input class="input" name="website" id="f-website" placeholder="example.com" value="${v("website")}"></label>
+        <div class="field"><span class="field-head"><label for="f-website">Website</label>${lead?.website ? `<a class="field-link" href="${esc(webHref(lead.website))}" target="_blank" rel="noopener">Open site<span aria-hidden="true"> ↗</span></a>` : ""}</span><input class="input" name="website" id="f-website" placeholder="example.com" value="${v("website")}"></div>
         <div class="grid-2">
           <label class="field">Website flag<select class="input" name="site_flag" id="f-site_flag">
             ${["weak", "none", "social", "good", "unknown"].map((k) => `<option value="${k}" ${(lead?.site_flag ?? "none") === k ? "selected" : ""}>${FLAG[k]}</option>`).join("")}
