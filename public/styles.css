@@ -390,6 +390,9 @@ table.leads tr.selected td { background: var(--accent-soft); }
 
 /* ---------- history ---------- */
 .history-box { margin-top: 24px; }
+/* Website report section on the call list card, between the lead facts and the call log. */
+.call-report { border-top: 1px solid var(--line); padding: 18px 0; }
+.call-report .card-head h2 { font-size: 16px; }
 .history-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
 .history { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
 .history li { display: grid; grid-template-columns: 92px 1fr; gap: 10px; font-size: 14px; }
