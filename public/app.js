@@ -222,6 +222,9 @@ async function loadReports() {
     if (before && after < before) {
       const done = before - after;
       toast(`${done} audit${done === 1 ? "" : "s"} finished`);
+      // A finished audit also updates the lead's Website flag and Site issues.
+      const { leads } = await api("GET", "leads").catch(() => ({}));
+      if (leads) state.leads = leads;
     }
     refreshAuditViews();
   } catch {}

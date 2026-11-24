@@ -152,6 +152,10 @@ async function runJob(env, job, deps) {
           `UPDATE reports SET status = 'done', url = ?, score = ?, scores = ?, issues = ?, screenshot = ?, writer = ?, error = NULL, finished_at = ? WHERE id = ?`,
         )
         .bind(result.url, result.score, JSON.stringify(result.scores), JSON.stringify(result.issues), result.screenshot, result.writer, finished, job.id),
+      // The audit is the better test, so it replaces the quick check's flag and issues on the lead.
+      db
+        .prepare("UPDATE leads SET site_flag = ?, site_issues = ?, updated_at = ? WHERE id = ? AND site_flag NOT IN ('none', 'social')")
+        .bind(result.site_flag, JSON.stringify(result.site_issues), finished, job.lead_id),
       // Keep only the newest finished report per lead; screenshots make old ones heavy.
       db.prepare("DELETE FROM reports WHERE lead_id = ? AND id != ? AND status IN ('done', 'failed', 'skipped')").bind(job.lead_id, job.id),
     ]);
@@ -184,9 +188,9 @@ export async function runAudit(env, lead, deps = {}) {
 
   const site = await (deps.inspectSite || inspectSite)(lead.website);
   if (site.site_flag === "social") throw new AuditError("Only a social page, nothing to audit.", { final: true });
-  if (!site.html && site.site_issues.includes("Site is down or unreachable")) {
-    throw new AuditError("The site is down or unreachable.");
-  }
+  // Our own fetch can be refused by bot protection, so it never decides on its own that a site is down.
+  // PageSpeed loads the page in a real Chrome; only if that fails too is the site treated as down.
+  const ourFetchFailed = !site.html && site.site_issues.includes("Site is down or unreachable");
 
   const target = site.finalUrl || lead.website;
   const qs = new URLSearchParams({ url: target, strategy: "mobile", key });
@@ -198,6 +202,7 @@ export async function runAudit(env, lead, deps = {}) {
     });
     data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      if (ourFetchFailed) throw new AuditError("The site is down or unreachable.");
       const msg = data?.error?.message || `status ${res.status}`;
       throw new AuditError(`PageSpeed couldn't test the site: ${msg.slice(0, 200)}`, { final: res.status === 400 || res.status === 403 });
     }
@@ -206,7 +211,11 @@ export async function runAudit(env, lead, deps = {}) {
     throw new AuditError("PageSpeed took too long to answer.");
   }
   const lh = data.lighthouseResult;
-  if (!lh?.categories) throw new AuditError("PageSpeed returned no results for this site.");
+  if (!lh?.categories) {
+    if (ourFetchFailed) throw new AuditError("The site is down or unreachable.");
+    throw new AuditError("PageSpeed returned no results for this site.");
+  }
+  const finalUrl = lh.finalDisplayedUrl || lh.finalUrl || target;
 
   const scores = {
     performance: pct(lh.categories.performance?.score),
@@ -217,7 +226,7 @@ export async function runAudit(env, lead, deps = {}) {
   const vals = Object.values(scores).filter((v) => v != null);
   const score = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 
-  const top = rankIssues(lh.audits || {}, site, scores).slice(0, 3);
+  const top = rankIssues(lh.audits || {}, site, scores, finalUrl).slice(0, 3);
   const written = await writeIssues(env, lead, top, deps).catch((err) => {
     console.error("claude write-up failed", err);
     return null;
@@ -230,7 +239,8 @@ export async function runAudit(env, lead, deps = {}) {
   }));
 
   return {
-    url: lh.finalDisplayedUrl || lh.finalUrl || target,
+    url: finalUrl,
+    ...siteFromAudit(lh.audits || {}, site, scores, finalUrl),
     score,
     scores,
     issues,
@@ -246,7 +256,23 @@ const mb = (bytes) => (bytes / 1_048_576).toFixed(1);
 
 // Every failed check becomes a candidate issue with a weight for business impact.
 // The 3 heaviest win, one per type. Facts are the real numbers Claude may use.
-export function rankIssues(audits, site, scores) {
+// The lead's Website flag and Site issues, redone from the audit. Google's browser is the judge of
+// HTTPS, mobile layout and speed; our own fetch only adds what it read in the page (copyright year, old code).
+export function siteFromAudit(audits, site, scores, finalUrl) {
+  const issues = [];
+  if (/^http:/i.test(finalUrl || "")) issues.push("No HTTPS");
+  if (audits.viewport && audits.viewport.score === 0) issues.push("Not mobile friendly");
+  const lcp = audits["largest-contentful-paint"]?.numericValue;
+  if ((typeof lcp === "number" && lcp > 4000) || (typeof scores?.performance === "number" && scores.performance < 50)) {
+    issues.push("Slow to load");
+  }
+  for (const i of site?.site_issues || []) {
+    if (/^Copyright \d{4}$/.test(i) || i === "Outdated code" || i === "Old site builder") issues.push(i);
+  }
+  return { site_flag: issues.length ? "weak" : "good", site_issues: issues };
+}
+
+export function rankIssues(audits, site, scores, finalUrl) {
   const out = [];
   const add = (type, weight, facts) => out.push({ type, weight, facts });
   const html = site?.html || "";
@@ -255,10 +281,13 @@ export function rankIssues(audits, site, scores) {
   if (audits["is-crawlable"] && audits["is-crawlable"].score === 0) {
     add("hidden_from_google", 100, ["The homepage tells Google not to show it in search results."]);
   }
-  if (siteIssues.includes("No HTTPS") || (audits["is-on-https"] && audits["is-on-https"].score === 0)) {
+  // Only when Google's browser ended up on an http:// address. A failed "is-on-https" check alone usually
+  // means a few images or scripts load over http on an https page; browsers don't show "Not secure" for that.
+  const onHttp = finalUrl ? /^http:/i.test(finalUrl) : siteIssues.includes("No HTTPS");
+  if (onHttp) {
     add("not_secure", 92, ["The site loads without HTTPS, so browsers label it \"Not secure\"."]);
   }
-  const noViewport = (audits.viewport && audits.viewport.score === 0) || siteIssues.includes("Not mobile friendly");
+  const noViewport = audits.viewport ? audits.viewport.score === 0 : siteIssues.includes("Not mobile friendly");
   if (noViewport) {
     add("not_mobile", 90, ["The homepage has no mobile layout setting, so phones show a shrunken desktop page."]);
   }

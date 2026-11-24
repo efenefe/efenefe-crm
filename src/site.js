@@ -39,8 +39,15 @@ export async function inspectSite(raw) {
   let page = await fetchPage(httpsUrl);
   if (!page.ok) {
     const plain = await fetchPage(httpUrl);
-    if (!plain.ok) return { site_flag: "weak", site_issues: ["Site is down or unreachable"], html: "", finalUrl: url.href };
-    page = plain;
+    if (plain.ok) {
+      page = plain;
+    } else if (page.reason === "blocked" || plain.reason === "blocked") {
+      // The site answered but refused our check (bot protection, rate limit, timeout). That says nothing
+      // about the site itself, so don't report it as an issue; the audit (Google's browser) can still test it.
+      return { site_flag: "unknown", site_issues: [], html: "", finalUrl: url.href, blocked: true };
+    } else {
+      return { site_flag: "weak", site_issues: ["Site is down or unreachable"], html: "", finalUrl: url.href };
+    }
   }
   if (!page.finalUrl.startsWith("https://")) issues.push("No HTTPS");
   if (page.ms > 4000) issues.push("Slow to load");
@@ -60,15 +67,27 @@ export async function inspectSite(raw) {
   return { site_flag: issues.length ? "weak" : "good", site_issues: issues, html, finalUrl: page.finalUrl };
 }
 
+// Statuses that mean "the server is up but turned our request away", not "the site is broken".
+const BLOCKED_STATUSES = new Set([401, 403, 406, 429, 503]);
+
+// reason on failure: "blocked" (the server answered but refused us, or was too slow) or "down" (no answer at all).
 export async function fetchPage(target) {
   const started = Date.now();
   try {
     const res = await fetch(target, {
       redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0 (compatible; efenefe-site-check/1.0)", accept: "text/html" },
-      signal: AbortSignal.timeout(9000),
+      headers: {
+        // A plain browser identity: many small-business hosts block anything that looks like a bot.
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "fr-CA,fr;q=0.9,en;q=0.8",
+      },
+      signal: AbortSignal.timeout(12_000),
     });
-    if (res.status >= 400) return { ok: false };
+    if (res.status >= 400) {
+      res.body?.cancel().catch(() => {});
+      return { ok: false, reason: BLOCKED_STATUSES.has(res.status) ? "blocked" : "down", status: res.status };
+    }
     const reader = res.body?.getReader();
     let html = "";
     if (reader) {
@@ -81,7 +100,8 @@ export async function fetchPage(target) {
       reader.cancel().catch(() => {});
     }
     return { ok: true, finalUrl: res.url || target, html, ms: Date.now() - started };
-  } catch {
-    return { ok: false };
+  } catch (err) {
+    const timedOut = err?.name === "TimeoutError" || err?.name === "AbortError";
+    return { ok: false, reason: timedOut ? "blocked" : "down" };
   }
 }
