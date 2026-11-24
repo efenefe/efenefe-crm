@@ -1,5 +1,9 @@
 // efenefe CRM: API for the call tracker. Static screens are served from ./public.
 
+import { HttpError, json, body } from "./http.js";
+import { isSocial, checkSite } from "./site.js";
+import { AUDIT_SCHEMA, queueAudits, listReports, getReport, processQueue } from "./audit.js";
+
 const STATUSES = ["to_call", "called", "interested", "follow_up", "proposal", "won", "lost"];
 const OUTCOMES = ["no_answer", "voicemail", "call_back", "interested", "not_interested", "wrong_number"];
 const FLAGS = ["unknown", "none", "social", "weak", "good"];
@@ -34,6 +38,7 @@ const SCHEMA = [
     note TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS calls_lead ON calls(lead_id, called_at)`,
+  ...AUDIT_SCHEMA,
 ];
 
 // Columns added after the first release. Each runs once; "duplicate column" means it is already there.
@@ -79,14 +84,13 @@ export default {
       return json({ error: "Something went wrong on the server. Try again." }, 500);
     }
   },
-};
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
+  // Runs every minute (wrangler.jsonc triggers) and works through queued website audits.
+  async scheduled(controller, env, ctx) {
+    await ensureSchema(env.DB);
+    ctx.waitUntil(processQueue(env));
+  },
+};
 
 async function route(request, env, url, user) {
   const db = env.DB;
@@ -127,11 +131,18 @@ async function route(request, env, url, user) {
       if (method === "DELETE") {
         await db.batch([
           db.prepare("DELETE FROM calls WHERE lead_id = ?").bind(id),
+          db.prepare("DELETE FROM reports WHERE lead_id = ?").bind(id),
           db.prepare("DELETE FROM leads WHERE id = ?").bind(id),
         ]);
         return json({ ok: true });
       }
     }
+  }
+
+  if (parts[0] === "audits" && method === "POST") return json(await queueAudits(db, await body(request)), 201);
+  if (parts[0] === "reports" && method === "GET") {
+    if (parts[1]) return json({ report: await getReport(db, parts[1]) });
+    return json({ reports: await listReports(db) });
   }
 
   if (parts[0] === "search" && method === "POST") return json(await searchPlaces(env, db, await body(request)));
@@ -268,11 +279,6 @@ async function logCall(db, leadId, input) {
 
 // ---------- lead search (Google Places API, New) ----------
 
-const SOCIAL_HOSTS = [
-  "facebook.com", "fb.com", "fb.me", "instagram.com", "linktr.ee", "linkedin.com", "tiktok.com", "twitter.com",
-  "x.com", "yelp.com", "yelp.ca", "youtube.com", "business.site", "sites.google.com", "wa.me", "linkin.bio",
-];
-
 async function searchPlaces(env, db, input) {
   const category = String(input.category || "").trim().slice(0, 100);
   const city = String(input.city || "").trim().slice(0, 100);
@@ -334,79 +340,6 @@ async function searchPlaces(env, db, input) {
       };
     });
   return { query: { category, city }, requests, results };
-}
-
-function isSocial(url) {
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return SOCIAL_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
-  } catch {
-    return false;
-  }
-}
-
-// Quick health check of a business website. Any issue marks it as a weak site.
-async function checkSite(raw) {
-  let url;
-  try {
-    url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
-  } catch {
-    throw new HttpError(400, "That website address isn't valid.");
-  }
-  if (isSocial(url.href)) return { site_flag: "social", site_issues: ["Social page only"] };
-
-  const issues = [];
-  const httpsUrl = `https://${url.host}${url.pathname}${url.search}`;
-  const httpUrl = `http://${url.host}${url.pathname}${url.search}`;
-
-  let page = await fetchPage(httpsUrl);
-  if (!page.ok) {
-    const plain = await fetchPage(httpUrl);
-    if (!plain.ok) return { site_flag: "weak", site_issues: ["Site is down or unreachable"] };
-    page = plain;
-  }
-  if (!page.finalUrl.startsWith("https://")) issues.push("No HTTPS");
-  if (page.ms > 4000) issues.push("Slow to load");
-
-  const html = page.html;
-  if (!/<meta[^>]+name=["']?viewport/i.test(html)) issues.push("Not mobile friendly");
-
-  const year = new Date().getUTCFullYear();
-  const years = [...html.matchAll(/(?:©|&copy;|&#169;|copyright)[^<]{0,40}?((?:19|20)\d{2})(?:\s*[-–]\s*((?:19|20)\d{2}))?/gi)]
-    .map((m) => Number(m[2] || m[1]))
-    .filter((y) => y <= year);
-  if (years.length && Math.max(...years) <= year - 3) issues.push(`Copyright ${Math.max(...years)}`);
-
-  if (/<frameset|<marquee|<font[\s>]|\.swf["']/i.test(html)) issues.push("Outdated code");
-  if (/content=["']?(?:WordPress [1-4]\.|Microsoft FrontPage|iWeb|Adobe Dreamweaver)/i.test(html)) issues.push("Old site builder");
-
-  return { site_flag: issues.length ? "weak" : "good", site_issues: issues };
-}
-
-async function fetchPage(target) {
-  const started = Date.now();
-  try {
-    const res = await fetch(target, {
-      redirect: "follow",
-      headers: { "user-agent": "Mozilla/5.0 (compatible; efenefe-site-check/1.0)", accept: "text/html" },
-      signal: AbortSignal.timeout(9000),
-    });
-    if (res.status >= 400) return { ok: false };
-    const reader = res.body?.getReader();
-    let html = "";
-    if (reader) {
-      const dec = new TextDecoder();
-      while (html.length < 300_000) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        html += dec.decode(value, { stream: true });
-      }
-      reader.cancel().catch(() => {});
-    }
-    return { ok: true, finalUrl: res.url || target, html, ms: Date.now() - started };
-  } catch {
-    return { ok: false };
-  }
 }
 
 // ---------- auth (Cloudflare Access) ----------
@@ -478,21 +411,4 @@ function b64urlBytes(s) {
 }
 function b64urlText(s) {
   return new TextDecoder().decode(b64urlBytes(s));
-}
-
-// ---------- helpers ----------
-
-async function body(request) {
-  try {
-    const data = await request.json();
-    if (data && typeof data === "object" && !Array.isArray(data)) return data;
-  } catch {}
-  throw new HttpError(400, "Request body must be a JSON object.");
-}
-
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-  });
 }

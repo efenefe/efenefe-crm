@@ -35,6 +35,9 @@ const state = {
   panel: null, // { id } or { id: null } for new
   stats: null,
   statsLoading: false,
+  reports: new Map(), // lead_id -> { latest, done } (no screenshots)
+  reportId: null,
+  reportCache: new Map(), // report id -> full report
 };
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -157,9 +160,12 @@ function callQueue() {
 // ---------- views ----------
 
 function setView(view) {
-  state.view = ["today", "calls", "leads", "find"].includes(view) ? view : "today";
+  const m = /^report\/([\w-]+)$/.exec(view || "");
+  state.reportId = m ? m[1] : null;
+  state.view = m ? "report" : ["today", "calls", "leads", "find"].includes(view) ? view : "today";
+  const navView = state.view === "report" ? "leads" : state.view;
   document.querySelectorAll(".nav a").forEach((a) => {
-    if (a.dataset.view === state.view) a.setAttribute("aria-current", "page");
+    if (a.dataset.view === navView) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
   render();
@@ -170,7 +176,184 @@ function render() {
   const badge = $("#calls-count");
   badge.hidden = n === 0;
   badge.textContent = n;
-  ({ today: renderToday, calls: renderCalls, leads: renderLeads, find: renderFind })[state.view]();
+  renderAuditChip();
+  ({ today: renderToday, calls: renderCalls, leads: renderLeads, find: renderFind, report: renderReport })[state.view]();
+}
+
+// ---------- website audits ----------
+
+const AUDIT_POLL_MS = 8000;
+let auditTimer = null;
+
+function auditOf(leadId) {
+  return state.reports.get(leadId) || null;
+}
+function pendingAudits() {
+  let n = 0;
+  for (const r of state.reports.values()) if (r.latest && (r.latest.status === "queued" || r.latest.status === "running")) n++;
+  return n;
+}
+function scoreClass(n) {
+  return n == null ? "" : n >= 90 ? "good" : n >= 50 ? "mid" : "bad";
+}
+function scorePill(n) {
+  return n == null ? "" : `<span class="score ${scoreClass(n)}" title="Website score out of 100">${n}</span>`;
+}
+// Small audit state shown next to the website flag.
+function auditMini(leadId) {
+  const a = auditOf(leadId);
+  if (!a?.latest) return "";
+  const s = a.latest.status;
+  if (s === "queued") return `<span class="audit-state">Audit queued</span>`;
+  if (s === "running") return `<span class="audit-state busy">Auditing…</span>`;
+  if (a.done) return scorePill(a.done.score);
+  if (s === "failed") return `<span class="audit-state bad" title="${esc(a.latest.error || "")}">Audit failed</span>`;
+  if (s === "skipped") return `<span class="audit-state" title="${esc(a.latest.error || "")}">Not audited</span>`;
+  return "";
+}
+
+async function loadReports() {
+  clearTimeout(auditTimer);
+  try {
+    const { reports } = await api("GET", "reports");
+    const before = pendingAudits();
+    state.reports = new Map(reports.map((r) => [r.lead_id, r]));
+    const after = pendingAudits();
+    if (before && after < before) {
+      const done = before - after;
+      toast(`${done} audit${done === 1 ? "" : "s"} finished`);
+    }
+    refreshAuditViews();
+  } catch {}
+  if (pendingAudits()) auditTimer = setTimeout(loadReports, AUDIT_POLL_MS);
+}
+
+// Update only the parts that show audits, so a form you're typing in isn't reset.
+function refreshAuditViews() {
+  renderAuditChip();
+  if (state.view === "leads") renderLeads();
+  if (state.view === "today") renderToday();
+  if (state.view === "report") renderReport();
+  const box = $("#report-box");
+  if (box && state.panel?.id) box.innerHTML = reportBox(state.panel.id);
+}
+
+function renderAuditChip() {
+  const chip = $("#audit-chip");
+  if (!chip) return;
+  const n = pendingAudits();
+  chip.hidden = n === 0;
+  chip.innerHTML = `<i aria-hidden="true"></i>Auditing ${n} site${n === 1 ? "" : "s"}`;
+}
+
+async function runAudits(ids, { bulk = false } = {}) {
+  try {
+    const res = await api("POST", "audits", { lead_ids: ids });
+    const parts = [];
+    if (res.queued) parts.push(`Queued ${res.queued} audit${res.queued === 1 ? "" : "s"}. They run in the background, about 3 a minute.`);
+    if (res.skipped.length) parts.push(`Skipped ${res.skipped.length} with no website to audit.`);
+    if (res.already) parts.push(`${res.already} already in the queue.`);
+    toast(parts.join(" ") || "Nothing to audit.");
+    if (bulk) state.leadSel.clear();
+    await loadReports();
+    render();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// Report section on the lead panel.
+function reportBox(leadId) {
+  const lead = state.leads.find((l) => l.id === leadId);
+  const a = auditOf(leadId);
+  const latest = a?.latest;
+  const done = a?.done;
+  const busy = latest && (latest.status === "queued" || latest.status === "running");
+  const canAudit = lead?.website;
+  const head = `<div class="card-head"><h2>Website report</h2>${done ? `<span class="link">${esc(when(done.finished_at || done.created_at).date)}</span>` : ""}</div>`;
+  let bodyHtml = "";
+  if (busy) {
+    bodyHtml = `<p class="audit-note"><span class="audit-state busy">${latest.status === "running" ? "Auditing…" : "Audit queued"}</span> ${latest.status === "running" ? "Testing the site now. This takes under a minute." : "Starts within a minute."}</p>`;
+  } else if (latest?.status === "failed" && !done) {
+    bodyHtml = `<p class="audit-note"><span class="audit-state bad">Audit failed</span> ${esc(latest.error || "")}</p>`;
+  } else if (latest?.status === "skipped" && !done) {
+    bodyHtml = `<p class="audit-note">${esc(latest.error || "Not audited.")}</p>`;
+  } else if (!done) {
+    bodyHtml = `<p class="audit-note muted">${canAudit ? "No audit yet. Run one to get a score and the 3 biggest issues with this site." : "Add a website to this lead to run an audit."}</p>`;
+  }
+  if (done) {
+    bodyHtml += `<div class="report-mini">
+      ${scorePill(done.score)}
+      <ol class="issue-titles">${done.issues.map((i) => `<li>${esc(i.title)}</li>`).join("")}</ol>
+    </div>`;
+  }
+  const actions = [
+    done ? `<a class="btn primary small" href="#report/${esc(done.id)}" data-close>View report</a>` : "",
+    canAudit && !busy ? `<button type="button" class="btn small" data-audit-one="${esc(leadId)}">${done || latest ? "Run again" : "Run audit"}</button>` : "",
+  ].filter(Boolean).join("");
+  return head + bodyHtml + (actions ? `<div class="report-actions">${actions}</div>` : "");
+}
+
+const CAT_LABEL = { performance: "Speed", seo: "Google search", accessibility: "Accessibility", best_practices: "Best practices" };
+
+async function renderReport() {
+  const id = state.reportId;
+  let report = state.reportCache.get(id);
+  if (!report) {
+    main.innerHTML = `<div class="loading">Loading report…</div>`;
+    try {
+      ({ report } = await api("GET", `reports/${id}`));
+      state.reportCache.set(id, report);
+    } catch (err) {
+      if (state.reportId !== id) return;
+      main.innerHTML = `<div class="page-head"><div><h1>Website report</h1></div><a class="btn" href="#leads">Back to leads</a></div><div class="empty"><b>Couldn't open this report.</b> ${esc(err.message)}</div>`;
+      return;
+    }
+    if (state.reportId !== id || state.view !== "report") return;
+  }
+  const lead = state.leads.find((l) => l.id === report.lead_id);
+  const a = auditOf(report.lead_id);
+  const busy = a?.latest && (a.latest.status === "queued" || a.latest.status === "running");
+  const newer = a?.done && a.done.id !== report.id ? a.done : null;
+  const s = report.scores || {};
+  const audited = when(report.finished_at || report.created_at);
+
+  main.innerHTML = `
+    <div class="page-head">
+      <div>
+        <p class="eyebrow">Website report</p>
+        <h1>${esc(lead?.business || "Deleted lead")}</h1>
+        <p>${report.url ? `<a href="${esc(webHref(report.url))}" target="_blank" rel="noopener">${esc(prettyUrl(report.url))}</a> · ` : ""}Audited ${esc(audited.date)} on a phone</p>
+      </div>
+      <div class="head-actions">
+        <a class="btn ghost" href="#leads">Back to leads</a>
+        ${lead ? `<button class="btn" data-open="${esc(lead.id)}">Open lead</button>` : ""}
+        ${lead?.website ? (busy ? `<button class="btn" disabled>${a.latest.status === "running" ? "Auditing…" : "Audit queued"}</button>` : `<button class="btn" data-audit-one="${esc(lead.id)}">Run again</button>`) : ""}
+        <button class="btn primary" disabled title="Publishing to efenefe.com comes in the next update">Publish</button>
+      </div>
+    </div>
+    ${newer ? `<div class="sel-bar"><span>A newer audit is ready.</span><span class="sel-actions"><a class="btn small primary" href="#report/${esc(newer.id)}">Open it</a></span></div>` : ""}
+    <div class="report">
+      <section class="card report-score">
+        <div class="big-score ${scoreClass(report.score)}"><b>${report.score ?? "–"}</b><span>out of 100</span></div>
+        <ul class="cat-scores">${Object.entries(CAT_LABEL).map(([k, label]) => s[k] == null ? "" : `
+          <li><span>${label}</span><span class="track"><span class="fill ${scoreClass(s[k])}" style="width:${s[k]}%"></span></span><b>${s[k]}</b></li>`).join("")}</ul>
+        ${report.screenshot ? `<figure class="shot"><img src="${esc(report.screenshot)}" alt="The homepage on a phone"><figcaption>The homepage on a phone</figcaption></figure>` : ""}
+      </section>
+      <section class="card report-issues">
+        <div class="card-head"><h2>${report.issues.length ? `The ${report.issues.length === 1 ? "biggest issue" : `${report.issues.length} biggest issues`}` : "No major issues found"}</h2></div>
+        ${report.issues.length ? `<ol class="issues-list">${report.issues.map((i, n) => `
+          <li>
+            <span class="num">${n + 1}</span>
+            <div>
+              <h3>${esc(i.title)}</h3>
+              <p>${esc(i.impact)}</p>
+              ${i.facts?.length ? `<ul class="evidence">${i.facts.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
+            </div>
+          </li>`).join("")}</ol>` : `<p class="muted">This site passed the main checks. It may still be worth a look in person.</p>`}
+        ${report.writer === "template" ? `<p class="hint">Written with standard wording. Add ANTHROPIC_API_KEY on the Worker for wording tailored to each site.</p>` : ""}
+      </section>
+    </div>`;
 }
 
 function leadRow(l, { showDue = true } = {}) {
@@ -320,7 +503,7 @@ function renderToday() {
       <div class="card-head"><h2>Next call</h2><span class="link">${queue.length} in queue</span></div>
       <div class="who">${esc(next.business)}</div>
       <div class="why">${next.next_follow_up && next.next_follow_up <= t ? `Follow-up ${esc(dueLabel(next.next_follow_up).toLowerCase())}` : esc(["New lead", next.category, next.city].filter(Boolean).join(" · "))}</div>
-      <div class="meta">${flagChip(next.site_flag)}</div>
+      <div class="meta">${flagChip(next.site_flag)}${auditMini(next.id)}</div>
       ${next.phone ? `<a class="phone-link" href="${esc(telHref(next.phone))}">${esc(next.phone)}</a>` : `<p class="why" style="margin:16px 0">No phone number yet.</p>`}
       <a class="btn primary" href="#calls">Start calling</a>
     </section>` : `
@@ -445,6 +628,7 @@ function facts(l) {
     ["Contact", esc(l.contact || "")],
     ["Category", esc(l.category || "")],
     ["Website", l.website ? `<a href="${esc(webHref(l.website))}" target="_blank" rel="noopener">${esc(prettyUrl(l.website))}</a>` : ""],
+    ["Top issue", auditOf(l.id)?.done?.issues?.[0] ? `<a href="#report/${esc(auditOf(l.id).done.id)}">${esc(auditOf(l.id).done.issues[0].title)}</a> ${scorePill(auditOf(l.id).done.score)}` : ""],
     ["Site issues", l.site_issues?.length ? `<span class="issues">${l.site_issues.map((i) => `<span>${esc(i)}</span>`).join("")}</span>` : ""],
     ["Address", esc([l.address, l.city].filter(Boolean).join(", "))],
     ["Email", l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ""],
@@ -583,7 +767,7 @@ function renderLeads() {
       <span><b>${sel.length}</b> selected</span>
       <span class="sel-actions">${sel.every((id) => state.leads.find((l) => l.id === id)?.later)
         ? `<button class="btn small" data-later-bulk="0">Move back to active</button>`
-        : `<button class="btn small" data-later-bulk="1">Save for later</button>`}<button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
+        : `<button class="btn small" data-later-bulk="1">Save for later</button>`}<button class="btn small primary" data-audit-bulk>Run audit</button><button class="btn small" data-move-back>Move back to Find leads</button><button class="btn small ghost" data-sel-clear>Clear</button></span>
     </div>`;
 
   const active = list.filter((l) => !l.later);
@@ -613,7 +797,7 @@ function renderLeads() {
       <tbody>${list.map((l, i) => `${l.later && (i === 0 || !list[i - 1].later) ? `<tr class="later-head"><td colspan="7"><span>Saved for later</span><b>${saved.length}</b><small>Not in your Call list or Today until you move them back.</small></td></tr>` : ""}<tr data-open="${esc(l.id)}" tabindex="0" class="${state.leadSel.has(l.id) ? "selected" : ""} ${l.later ? "later" : ""}">
         <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
         <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
-        <td>${flagChip(l.site_flag)}</td>
+        <td><span class="site-cell">${flagChip(l.site_flag)}${auditMini(l.id)}</span></td>
         <td class="hide-phone phone">${esc(l.phone || "")}</td>
         <td class="hide-phone">${esc(l.city || "")}</td>
         <td>${statusChip(l.status)}</td>
@@ -852,6 +1036,7 @@ function openPanel(id) {
     <div class="panel-body">
       ${lead?.later ? `<div class="saved-note">Saved for later. It stays out of your Call list and Today until you move it back.</div>` : ""}
       ${lead && lead.phone ? `<div class="dial"><a class="phone-big" href="${esc(telHref(lead.phone))}">${esc(lead.phone)}</a><button class="btn small" data-copy="${esc(lead.phone)}">Copy</button></div>` : ""}
+      ${lead ? `<section class="card" id="report-box">${reportBox(lead.id)}</section>` : ""}
       <form class="form" id="lead-form" novalidate>
         <label class="field">Business name *<input class="input" name="business" id="f-business" required value="${v("business")}"></label>
         <div class="grid-2">
@@ -950,6 +1135,15 @@ document.addEventListener("click", async (e) => {
     return renderLeads();
   }
   if (t.closest(".sel-cell")) return; // clicks around the checkbox don't open the lead
+  if (t.closest("[data-audit-bulk]")) {
+    t.closest("[data-audit-bulk]").disabled = true;
+    return runAudits([...state.leadSel], { bulk: true });
+  }
+  const ao = t.closest("[data-audit-one]");
+  if (ao) {
+    ao.disabled = true;
+    return runAudits([ao.dataset.auditOne]);
+  }
   const lb = t.closest("[data-later-bulk]");
   if (lb) {
     lb.disabled = true;
@@ -1080,6 +1274,7 @@ async function boot() {
     const av = $("#me");
     av.title = state.me ? `Signed in as ${state.me}` : "";
     setView(location.hash.slice(1) || "today");
+    loadReports();
   } catch (err) {
     main.innerHTML = `<div class="empty"><b>Couldn't load your leads.</b> ${esc(err.message)}</div>`;
   }
