@@ -21,5 +21,7 @@
   ],
   // Login values (ACCESS_TEAM_DOMAIN, ACCESS_AUD) and the GOOGLE_PLACES_API_KEY secret are set in the
   // Cloudflare dashboard. keep_vars stops deploys from wiping them.
-  "keep_vars": true
+  "keep_vars": true,
+  // Every minute, the Worker runs the next queued website audits (src/audit.js).
+  "triggers": { "crons": ["* * * * *"] }
 }
