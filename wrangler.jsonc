@@ -23,5 +23,7 @@
   // Cloudflare dashboard. keep_vars stops deploys from wiping them.
   "keep_vars": true,
   // Every minute, the Worker runs the next queued website audits (src/audit.js).
-  "triggers": { "crons": ["* * * * *"] }
+  "triggers": { "crons": ["* * * * *"] },
+  // Branch builds (pull requests) upload a Preview. Cron triggers don't run there; only production runs audits.
+  "previews": {}
 }
