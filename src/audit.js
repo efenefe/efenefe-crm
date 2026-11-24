@@ -31,6 +31,7 @@ export const AUDIT_SCHEMA = [
 
 const MAX_ATTEMPTS = 2;
 const STALE_MS = 5 * 60_000; // a running audit older than this was cut off and goes back in the queue
+const WEAK_BELOW = 70; // overall audit score under this marks the website Weak
 const MAX_ISSUES = 5; // issues shown in each report
 const PER_RUN = 3; // audits started in parallel by each scheduled run
 const MODEL = "claude-opus-5-5";
@@ -277,7 +278,13 @@ export function siteFromAudit(audits, site, scores, finalUrl) {
   for (const i of site?.site_issues || []) {
     if (/^Copyright \d{4}$/.test(i) || i === "Outdated code" || i === "Old site builder") issues.push(i);
   }
-  return { site_flag: issues.length ? "weak" : "good", site_issues: issues };
+  // The pill follows the overall score. Only the two problems a visitor sees right away (a "Not secure"
+  // warning, a desktop page squeezed onto a phone) make a well-scoring site Weak. Other findings stay listed.
+  const vals = Object.values(scores || {}).filter((v) => typeof v === "number");
+  const score = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  const dealbreaker = issues.includes("No HTTPS") || issues.includes("Not mobile friendly");
+  const weak = dealbreaker || (score != null && score < WEAK_BELOW);
+  return { site_flag: weak ? "weak" : "good", site_issues: issues };
 }
 
 export function rankIssues(audits, site, scores, finalUrl) {

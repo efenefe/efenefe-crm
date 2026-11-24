@@ -197,7 +197,7 @@ function scoreClass(n) {
   return n == null ? "" : n >= 90 ? "good" : n >= 50 ? "mid" : "bad";
 }
 function scorePill(n) {
-  return n == null ? "" : `<span class="score ${scoreClass(n)}" title="Website score out of 100">${n}</span>`;
+  return n == null ? "" : `<span class="score ${scoreClass(n)}" title="efenefe score out of 100: the average of Google's Lighthouse scores">${n}</span>`;
 }
 const SPINNER = `<i class="spinner" aria-hidden="true"></i>`;
 
@@ -334,7 +334,7 @@ function reportBox(leadId) {
     bodyHtml += `<div class="report-mini">
       ${scorePill(done.score)}
       <ol class="issue-titles">${done.issues.map((i) => `<li>${esc(i.title)}</li>`).join("")}</ol>
-    </div>`;
+    </div>${googleScores(done.scores)}`;
   }
   const actions = [
     done ? `<a class="btn primary small" href="#report/${esc(done.id)}" data-close>View report</a>` : "",
@@ -343,7 +343,16 @@ function reportBox(leadId) {
   return head + bodyHtml + (actions ? `<div class="report-actions">${actions}</div>` : "");
 }
 
-const CAT_LABEL = { performance: "Speed", seo: "Google search", accessibility: "Accessibility", best_practices: "Best practices" };
+// Google Lighthouse category names, as Google's own PageSpeed and Lighthouse reports show them.
+const CAT_LABEL = { performance: "Performance", seo: "SEO", accessibility: "Accessibility", best_practices: "Best Practices" };
+
+// Google's four scores as small colored chips, for the lead panel.
+function googleScores(scores) {
+  const s = scores || {};
+  const items = Object.entries(CAT_LABEL).filter(([k]) => s[k] != null);
+  if (!items.length) return "";
+  return `<div class="g-scores"><span class="g-label">Google Lighthouse</span>${items.map(([k, label]) => `<span class="g-score"><b class="${scoreClass(s[k])}">${s[k]}</b>${label}</span>`).join("")}</div>`;
+}
 
 async function renderReport() {
   const id = state.reportId;
@@ -384,7 +393,8 @@ async function renderReport() {
     ${newer ? `<div class="sel-bar"><span>A newer audit is ready.</span><span class="sel-actions"><a class="btn small primary" href="#report/${esc(newer.id)}">Open it</a></span></div>` : ""}
     <div class="report">
       <section class="card report-score">
-        <div class="big-score ${scoreClass(report.score)}"><b>${report.score ?? "–"}</b><span>out of 100</span></div>
+        <div class="big-score ${scoreClass(report.score)}"><b>${report.score ?? "–"}</b><span>efenefe score, out of 100</span></div>
+        <p class="cat-head">Google Lighthouse scores <span>(mobile)</span></p>
         <ul class="cat-scores">${Object.entries(CAT_LABEL).map(([k, label]) => s[k] == null ? "" : `
           <li><span>${label}</span><span class="track"><span class="fill ${scoreClass(s[k])}" style="width:${s[k]}%"></span></span><b>${s[k]}</b></li>`).join("")}</ul>
         ${report.screenshot ? `<figure class="shot"><img src="${esc(report.screenshot)}" alt="The homepage on a phone"><figcaption>The homepage on a phone</figcaption></figure>` : ""}

@@ -579,6 +579,13 @@ tr.auditing td { background: color-mix(in srgb, var(--accent-soft) 55%, transpar
 .big-score b { font: 600 64px/1 var(--f-display); letter-spacing: -.03em; }
 .big-score span { color: var(--ink-2); font-size: 14px; }
 .big-score.good b { color: var(--good); } .big-score.mid b { color: var(--amber); } .big-score.bad b { color: var(--none); }
+.cat-head { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.cat-head span { font-weight: 400; color: var(--ink-2); }
+.g-scores { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: -4px 0 14px; font-size: 12px; color: var(--ink-2); }
+.g-label { font-weight: 600; color: var(--ink); }
+.g-score { display: inline-flex; align-items: baseline; gap: 4px; }
+.g-score b { font: 600 12px var(--f-mono); font-variant-numeric: tabular-nums; }
+.g-score b.good { color: var(--good); } .g-score b.mid { color: var(--amber); } .g-score b.bad { color: var(--none); }
 .cat-scores { list-style: none; margin: 0 0 20px; padding: 0; display: grid; gap: 10px; }
 .cat-scores li { display: grid; grid-template-columns: 112px minmax(0, 1fr) 28px; align-items: center; gap: 10px; font-size: 13px; }
 .cat-scores .track { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
