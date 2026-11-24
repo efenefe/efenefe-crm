@@ -1,5 +1,5 @@
 // Website audit reports: a queue of audits in D1, worked through by the scheduled trigger.
-// Each audit runs Google PageSpeed Insights (mobile), ranks the 3 biggest issues in code,
+// Each audit runs Google PageSpeed Insights (mobile), ranks the 5 biggest issues in code,
 // then has Claude write a short title and impact line for each. The report never says how to fix an issue.
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -31,6 +31,7 @@ export const AUDIT_SCHEMA = [
 
 const MAX_ATTEMPTS = 2;
 const STALE_MS = 5 * 60_000; // a running audit older than this was cut off and goes back in the queue
+const MAX_ISSUES = 5; // issues shown in each report
 const PER_RUN = 3; // audits started in parallel by each scheduled run
 const MODEL = "claude-opus-5-5";
 
@@ -226,7 +227,7 @@ export async function runAudit(env, lead, deps = {}) {
   const vals = Object.values(scores).filter((v) => v != null);
   const score = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 
-  const top = rankIssues(lh.audits || {}, site, scores, finalUrl).slice(0, 3);
+  const top = rankIssues(lh.audits || {}, site, scores, finalUrl).slice(0, MAX_ISSUES);
   const written = await writeIssues(env, lead, top, deps).catch((err) => {
     console.error("claude write-up failed", err);
     return null;
@@ -255,7 +256,7 @@ const secs = (ms) => (ms / 1000).toFixed(1);
 const mb = (bytes) => (bytes / 1_048_576).toFixed(1);
 
 // Every failed check becomes a candidate issue with a weight for business impact.
-// The 3 heaviest win, one per type. Facts are the real numbers Claude may use.
+// The MAX_ISSUES heaviest win, one per type. Facts are the real numbers Claude may use.
 // The lead's Website flag and Site issues, redone from the audit. Google's browser is the judge of
 // HTTPS, mobile layout and speed; our own fetch only adds what it read in the page (copyright year, old code).
 export function siteFromAudit(audits, site, scores, finalUrl) {

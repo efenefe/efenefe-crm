@@ -319,7 +319,7 @@ function reportBox(leadId) {
         ${running ? `<span class="elapsed" title="Time since this audit started" data-since="${esc(latest.started_at || latest.created_at)}">${elapsed(latest.started_at || latest.created_at)}</span>` : ""}
       </div>
       <div class="progress-track ${running ? "" : "waiting"}" aria-hidden="true"><span></span></div>
-      <p class="muted">${running ? "Google is loading the site on a phone, then the 3 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
+      <p class="muted">${running ? "Google is loading the site on a phone, then the 5 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
     </div>`;
   } else if (isUnreachable(latest) && !done) {
     bodyHtml = `<p class="audit-note"><span class="audit-state offline">Site unreachable</span> The site didn't respond when it was tested, so there is nothing to audit. Open it in a browser to check, then run the audit again.</p>`;
@@ -328,7 +328,7 @@ function reportBox(leadId) {
   } else if (latest?.status === "skipped" && !done) {
     bodyHtml = `<p class="audit-note">${esc(latest.error || "Not audited.")}</p>`;
   } else if (!done) {
-    bodyHtml = `<p class="audit-note muted">${canAudit ? "No audit yet. Run one to get a score and the 3 biggest issues with this site." : "Add a website to this lead to run an audit."}</p>`;
+    bodyHtml = `<p class="audit-note muted">${canAudit ? "No audit yet. Run one to get a score and the 5 biggest issues with this site." : "Add a website to this lead to run an audit."}</p>`;
   }
   if (done) {
     bodyHtml += `<div class="report-mini">
