@@ -400,9 +400,20 @@ async function renderReport() {
               ${i.facts?.length ? `<ul class="evidence">${i.facts.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
             </div>
           </li>`).join("")}</ol>` : `<p class="muted">This site passed the main checks. It may still be worth a look in person.</p>`}
-        ${report.writer === "template" ? `<p class="hint">Written with standard wording. Add ANTHROPIC_API_KEY on the Worker for wording tailored to each site.</p>` : ""}
+        ${writerNote(report.writer)}
       </section>
     </div>`;
+}
+
+// Why a report uses standard wording instead of Claude's. Older reports only stored "template".
+function writerNote(writer) {
+  if (!writer || !writer.startsWith("template")) return "";
+  const reason = writer.slice("template".length).replace(/^:\s*/, "");
+  let text;
+  if (!reason) text = "Written with standard wording because Claude's write-up wasn't available when this audit ran. Run it again for wording tailored to this site.";
+  else if (reason === "no_key") text = "Written with standard wording. The Worker can't see ANTHROPIC_API_KEY, so add it as a secret on the production Worker for wording tailored to each site.";
+  else text = `Written with standard wording because Claude's write-up failed: ${reason.replace(/^\w+:\s*/, "")}`;
+  return `<p class="hint">${esc(text)}</p>`;
 }
 
 function leadRow(l, { showDue = true } = {}) {
