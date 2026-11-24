@@ -521,18 +521,47 @@ table.leads tr.selected td { background: var(--accent-soft); }
 .score.bad  { background: var(--none-bg); color: var(--none); }
 .audit-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 .audit-state.bad { color: var(--overdue); }
-.audit-state.busy::before, .audit-chip i {
-  content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none;
-  animation: audit-pulse 1.2s ease-in-out infinite;
+.audit-state.busy, .audit-state.queued {
+  height: 22px; padding: 0 9px; border-radius: 99px; font-weight: 500;
 }
-@keyframes audit-pulse { 50% { opacity: .25; } }
+.audit-state.busy { background: var(--accent-soft); color: var(--accent-text); }
+.audit-state.queued { background: var(--surface-2); color: var(--ink-2); }
+.audit-state.queued::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; flex: none; }
+
+/* Spinning ring: the audit is being worked on right now. */
+.spinner {
+  display: inline-block; width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+.btn .spinner { margin-right: 6px; border-top-color: currentColor; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Lead row while its audit runs. */
+tr.auditing td { background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+
 .audit-chip {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; border-radius: 99px;
   background: var(--surface); box-shadow: var(--card-shadow); border: 1px solid var(--card-line);
   font-size: 13px; font-weight: 500; color: var(--ink-2); text-decoration: none; white-space: nowrap;
 }
 .audit-chip:hover { color: var(--ink); }
-.audit-chip i { display: block; }
+.audit-chip b { color: var(--deep); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chip-bar { width: 44px; height: 4px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.chip-bar span { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .4s ease; }
+
+/* Progress block on the lead panel while an audit is queued or running. */
+.audit-progress { margin: 0 0 14px; display: grid; gap: 10px; }
+.audit-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.audit-progress .elapsed { font: 500 13px var(--f-mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.audit-progress p { margin: 0; font-size: 13px; }
+.progress-track { position: relative; height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.progress-track span {
+  position: absolute; inset: 0 auto 0 0; width: 35%; border-radius: 99px; background: var(--accent);
+  animation: indeterminate 1.4s ease-in-out infinite;
+}
+.progress-track.waiting span { background: var(--gray-fill); animation-duration: 2.4s; }
+@keyframes indeterminate { from { left: -35%; } to { left: 100%; } }
 .audit-note { margin: 0 0 12px; font-size: 14px; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .report-mini { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
 .issue-titles { margin: 0; padding-left: 18px; font-size: 14px; display: grid; gap: 4px; }
@@ -565,5 +594,9 @@ table.leads tr.selected td { background: var(--accent-soft); }
   .report { grid-template-columns: 1fr; }
   .report-issues { order: -1; }
   .audit-chip { height: 30px; padding: 0 10px; font-size: 12px; }
+  .audit-chip .chip-bar { display: none; }
 }
-@media (prefers-reduced-motion: reduce) { .audit-state.busy::before, .audit-chip i { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .progress-track span { animation: none; }
+  .progress-track span { left: 0; width: 100%; opacity: .5; }
+}

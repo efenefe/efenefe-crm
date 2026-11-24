@@ -73,7 +73,7 @@ export async function queueAudits(db, input) {
 // Latest audit per lead (any state), plus the latest finished one, without screenshots.
 export async function listReports(db) {
   const { results } = await db
-    .prepare("SELECT id, lead_id, status, url, score, scores, issues, error, created_at, finished_at FROM reports ORDER BY created_at DESC")
+    .prepare("SELECT id, lead_id, status, url, score, scores, issues, error, created_at, started_at, finished_at FROM reports ORDER BY created_at DESC")
     .all();
   const byLead = new Map();
   for (const r of results) {

@@ -182,7 +182,7 @@ function render() {
 
 // ---------- website audits ----------
 
-const AUDIT_POLL_MS = 8000;
+const AUDIT_POLL_MS = 5000;
 let auditTimer = null;
 
 function auditOf(leadId) {
@@ -199,13 +199,39 @@ function scoreClass(n) {
 function scorePill(n) {
   return n == null ? "" : `<span class="score ${scoreClass(n)}" title="Website score out of 100">${n}</span>`;
 }
+const SPINNER = `<i class="spinner" aria-hidden="true"></i>`;
+
+// Audits started together since the queue was last empty: how many are finished, out of how many.
+function batchProgress() {
+  const all = [...state.reports.values()].map((r) => r.latest).filter(Boolean);
+  const pending = all.filter((r) => r.status === "queued" || r.status === "running");
+  if (!pending.length) return null;
+  const start = pending.reduce((m, r) => (r.created_at < m ? r.created_at : m), pending[0].created_at);
+  const total = all.filter((r) => r.created_at >= start && r.status !== "skipped").length;
+  return { done: total - pending.length, total };
+}
+// Place in line for a queued audit (1 = next).
+function queuePosition(report) {
+  let n = 1;
+  for (const r of state.reports.values()) if (r.latest?.status === "queued" && r.latest.created_at < report.created_at) n++;
+  return n;
+}
+// "0:42" since an ISO time; kept live by the ticker below.
+function elapsed(iso) {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+setInterval(() => {
+  for (const el of document.querySelectorAll("[data-since]")) el.textContent = elapsed(el.dataset.since);
+}, 1000);
+
 // Small audit state shown next to the website flag.
 function auditMini(leadId) {
   const a = auditOf(leadId);
   if (!a?.latest) return "";
   const s = a.latest.status;
-  if (s === "queued") return `<span class="audit-state">Audit queued</span>`;
-  if (s === "running") return `<span class="audit-state busy">Auditing…</span>`;
+  if (s === "queued") return `<span class="audit-state queued">Queued</span>`;
+  if (s === "running") return `<span class="audit-state busy">${SPINNER}Auditing…</span>`;
   if (a.done) return scorePill(a.done.score);
   if (s === "failed") return `<span class="audit-state bad" title="${esc(a.latest.error || "")}">Audit failed</span>`;
   if (s === "skipped") return `<span class="audit-state" title="${esc(a.latest.error || "")}">Not audited</span>`;
@@ -244,13 +270,19 @@ function refreshAuditViews() {
 function renderAuditChip() {
   const chip = $("#audit-chip");
   if (!chip) return;
-  const n = pendingAudits();
-  chip.hidden = n === 0;
-  chip.innerHTML = `<i aria-hidden="true"></i>Auditing ${n} site${n === 1 ? "" : "s"}`;
+  const p = batchProgress();
+  chip.hidden = !p;
+  if (!p) return;
+  const pct = Math.round((p.done / p.total) * 100);
+  chip.title = `${p.done} of ${p.total} audits finished`;
+  chip.innerHTML = `${SPINNER}<span class="chip-text">Auditing <b>${p.done} of ${p.total}</b> done</span><span class="chip-bar" aria-hidden="true"><span style="width:${Math.max(pct, 6)}%"></span></span>`;
 }
 
 async function runAudits(ids, { bulk = false } = {}) {
   try {
+    for (const b of document.querySelectorAll("[data-audit-bulk], [data-audit-one]")) {
+      if (b.disabled) b.innerHTML = `${SPINNER}Starting…`;
+    }
     const res = await api("POST", "audits", { lead_ids: ids });
     const parts = [];
     if (res.queued) parts.push(`Queued ${res.queued} audit${res.queued === 1 ? "" : "s"}. They run in the background, about 3 a minute.`);
@@ -276,7 +308,15 @@ function reportBox(leadId) {
   const head = `<div class="card-head"><h2>Website report</h2>${done ? `<span class="link">${esc(when(done.finished_at || done.created_at).date)}</span>` : ""}</div>`;
   let bodyHtml = "";
   if (busy) {
-    bodyHtml = `<p class="audit-note"><span class="audit-state busy">${latest.status === "running" ? "Auditing…" : "Audit queued"}</span> ${latest.status === "running" ? "Testing the site now. This takes under a minute." : "Starts within a minute."}</p>`;
+    const running = latest.status === "running";
+    bodyHtml = `<div class="audit-progress" role="status">
+      <div class="audit-progress-head">
+        ${running ? `<span class="audit-state busy">${SPINNER}Auditing</span>` : `<span class="audit-state queued">Queued, #${queuePosition(latest)} in line</span>`}
+        ${running ? `<span class="elapsed" title="Time since this audit started" data-since="${esc(latest.started_at || latest.created_at)}">${elapsed(latest.started_at || latest.created_at)}</span>` : ""}
+      </div>
+      <div class="progress-track ${running ? "" : "waiting"}" aria-hidden="true"><span></span></div>
+      <p class="muted">${running ? "Google is loading the site on a phone, then the 3 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
+    </div>`;
   } else if (latest?.status === "failed" && !done) {
     bodyHtml = `<p class="audit-note"><span class="audit-state bad">Audit failed</span> ${esc(latest.error || "")}</p>`;
   } else if (latest?.status === "skipped" && !done) {
@@ -797,7 +837,7 @@ function renderLeads() {
     ${list.length ? `
     <div class="table-wrap"><table class="leads">
       <thead><tr><th class="sel-cell"><input type="checkbox" class="pick" data-lsel-all ${allShownSelected ? "checked" : ""} aria-label="Select all shown"></th>${th("business", "Business")}${th("site_flag", "Website")}<th class="hide-phone">Phone</th>${th("city", "City", "hide-phone")}${th("status", "Status")}${th("next_follow_up", "Follow-up")}</tr></thead>
-      <tbody>${list.map((l, i) => `${l.later && (i === 0 || !list[i - 1].later) ? `<tr class="later-head"><td colspan="7"><span>Saved for later</span><b>${saved.length}</b><small>Not in your Call list or Today until you move them back.</small></td></tr>` : ""}<tr data-open="${esc(l.id)}" tabindex="0" class="${state.leadSel.has(l.id) ? "selected" : ""} ${l.later ? "later" : ""}">
+      <tbody>${list.map((l, i) => `${l.later && (i === 0 || !list[i - 1].later) ? `<tr class="later-head"><td colspan="7"><span>Saved for later</span><b>${saved.length}</b><small>Not in your Call list or Today until you move them back.</small></td></tr>` : ""}<tr data-open="${esc(l.id)}" tabindex="0" class="${state.leadSel.has(l.id) ? "selected" : ""} ${l.later ? "later" : ""} ${auditOf(l.id)?.latest?.status === "running" ? "auditing" : ""}">
         <td class="sel-cell"><input type="checkbox" class="pick" data-lsel="${esc(l.id)}" id="lsel-${esc(l.id)}" ${state.leadSel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.business)}"></td>
         <td><span class="name">${esc(l.business)}</span>${l.category ? `<br><span class="cat">${esc(l.category)}</span>` : ""}</td>
         <td><span class="site-cell">${flagChip(l.site_flag)}${auditMini(l.id)}</span></td>
