@@ -269,6 +269,8 @@ function refreshAuditViews() {
   if (state.view === "report") renderReport();
   const box = $("#report-box");
   if (box && state.panel?.id) box.innerHTML = reportBox(state.panel.id);
+  // The call list card: refresh only its report section, so a half-written call log isn't wiped.
+  for (const el of document.querySelectorAll("[data-report-box]")) el.innerHTML = reportBox(el.dataset.reportBox);
 }
 
 function renderAuditChip() {
@@ -689,6 +691,7 @@ function callCard(l) {
         <button class="btn small" data-copy="${esc(l.phone)}">Copy</button>` : `<span class="none">No phone number. Add one with Edit lead.</span>`}
     </div>
     ${facts(l)}
+    <section class="call-report" data-report-box="${esc(l.id)}">${reportBox(l.id)}</section>
     ${logForm(l, { next: true })}
     <div class="history-box"><h3 class="history-title">Call history</h3><div data-history="${esc(l.id)}"><span class="muted">Loading…</span></div></div>`;
 }
@@ -698,7 +701,6 @@ function facts(l) {
     ["Contact", esc(l.contact || "")],
     ["Category", esc(l.category || "")],
     ["Website", l.website ? `<a href="${esc(webHref(l.website))}" target="_blank" rel="noopener">${esc(prettyUrl(l.website))}</a>` : ""],
-    ["Top issue", auditOf(l.id)?.done?.issues?.[0] ? `<a href="#report/${esc(auditOf(l.id).done.id)}">${esc(auditOf(l.id).done.issues[0].title)}</a> ${scorePill(auditOf(l.id).done.score)}` : ""],
     ["Site issues", l.site_issues?.length ? `<span class="issues">${l.site_issues.map((i) => `<span>${esc(i)}</span>`).join("")}</span>` : ""],
     ["Address", esc([l.address, l.city].filter(Boolean).join(", "))],
     ["Email", l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ""],
