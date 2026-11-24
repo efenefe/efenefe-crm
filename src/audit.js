@@ -1,5 +1,5 @@
 // Website audit reports: a queue of audits in D1, worked through by the scheduled trigger.
-// Each audit runs Google PageSpeed Insights (mobile), ranks the 3 biggest issues in code,
+// Each audit runs Google PageSpeed Insights (mobile), ranks the 5 biggest issues in code,
 // then has Claude write a short title and impact line for each. The report never says how to fix an issue.
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -31,6 +31,7 @@ export const AUDIT_SCHEMA = [
 
 const MAX_ATTEMPTS = 2;
 const STALE_MS = 5 * 60_000; // a running audit older than this was cut off and goes back in the queue
+const MAX_ISSUES = 5; // issues shown in each report
 const PER_RUN = 3; // audits started in parallel by each scheduled run
 const MODEL = "claude-opus-5-5";
 
@@ -226,11 +227,18 @@ export async function runAudit(env, lead, deps = {}) {
   const vals = Object.values(scores).filter((v) => v != null);
   const score = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
 
-  const top = rankIssues(lh.audits || {}, site, scores, finalUrl).slice(0, 3);
-  const written = await writeIssues(env, lead, top, deps).catch((err) => {
+  const top = rankIssues(lh.audits || {}, site, scores, finalUrl).slice(0, MAX_ISSUES);
+  // writeIssues returns the written issues, or a short reason why Claude's wording wasn't used.
+  let written = null;
+  let why = "";
+  try {
+    const out = await writeIssues(env, lead, top, deps);
+    if (Array.isArray(out)) written = out;
+    else why = out;
+  } catch (err) {
     console.error("claude write-up failed", err);
-    return null;
-  });
+    why = writerError(err);
+  }
   const issues = top.map((i, n) => ({
     type: i.type,
     facts: i.facts,
@@ -245,7 +253,7 @@ export async function runAudit(env, lead, deps = {}) {
     scores,
     issues,
     screenshot: lh.audits?.["final-screenshot"]?.details?.data || null,
-    writer: written ? MODEL : "template",
+    writer: written ? MODEL : `template${why ? `: ${why}` : ""}`,
   };
 }
 
@@ -255,7 +263,7 @@ const secs = (ms) => (ms / 1000).toFixed(1);
 const mb = (bytes) => (bytes / 1_048_576).toFixed(1);
 
 // Every failed check becomes a candidate issue with a weight for business impact.
-// The 3 heaviest win, one per type. Facts are the real numbers Claude may use.
+// The MAX_ISSUES heaviest win, one per type. Facts are the real numbers Claude may use.
 // The lead's Website flag and Site issues, redone from the audit. Google's browser is the judge of
 // HTTPS, mobile layout and speed; our own fetch only adds what it read in the page (copyright year, old code).
 export function siteFromAudit(audits, site, scores, finalUrl) {
@@ -386,9 +394,22 @@ const WrittenIssues = z.object({
   issues: z.array(z.object({ type: z.string(), title: z.string(), impact: z.string() })),
 });
 
+// Turns an Anthropic API error into a short reason the report screen can show.
+export function writerError(err) {
+  const status = err?.status;
+  const msg = String(err?.error?.error?.message || err?.message || "").replace(/\s+/g, " ").trim().slice(0, 160);
+  if (status === 401) return "auth: The Anthropic API key was rejected. It may be mistyped or revoked.";
+  if (status === 403) return `forbidden: ${msg || "The API key isn't allowed to use this model."}`;
+  if (status === 404) return `model: The model ${MODEL} isn't available to this API key.`;
+  if (status === 400 && /credit|billing|balance/i.test(msg)) return "credit: The Anthropic account is out of credit.";
+  if (status === 429) return "busy: The Anthropic API rate limit was hit. Run the audit again in a minute.";
+  if (status >= 500) return "busy: The Anthropic API was down for a moment. Run the audit again.";
+  return `error: ${status ? `${status} ` : ""}${msg || "Claude's write-up failed."}`;
+}
+
 async function writeIssues(env, lead, issues, deps) {
   if (!issues.length) return [];
-  if (!env.ANTHROPIC_API_KEY && !deps.anthropic) return null;
+  if (!env.ANTHROPIC_API_KEY && !deps.anthropic) return "no_key";
   const client = deps.anthropic || new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const input = {
     business: lead.business,
@@ -403,9 +424,9 @@ async function writeIssues(env, lead, issues, deps) {
     output_config: { effort: "low", format: zodOutputFormat(WrittenIssues) },
     messages: [{ role: "user", content: JSON.stringify(input, null, 2) }],
   });
-  if (response.stop_reason === "refusal") return null;
+  if (response.stop_reason === "refusal") return "output: Claude declined to write this one.";
   const out = response.parsed_output?.issues;
-  if (!Array.isArray(out) || out.length !== issues.length) return null;
-  if (out.some((o, n) => o.type !== issues[n].type || !o.title.trim() || !o.impact.trim())) return null;
+  if (!Array.isArray(out) || out.length !== issues.length) return "output: Claude's answer didn't match the issues found.";
+  if (out.some((o, n) => o.type !== issues[n].type || !o.title.trim() || !o.impact.trim())) return "output: Claude's answer didn't match the issues found.";
   return out.map((o) => ({ title: o.title.trim().slice(0, 120), impact: o.impact.trim().slice(0, 600) }));
 }

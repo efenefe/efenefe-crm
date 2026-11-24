@@ -319,7 +319,7 @@ function reportBox(leadId) {
         ${running ? `<span class="elapsed" title="Time since this audit started" data-since="${esc(latest.started_at || latest.created_at)}">${elapsed(latest.started_at || latest.created_at)}</span>` : ""}
       </div>
       <div class="progress-track ${running ? "" : "waiting"}" aria-hidden="true"><span></span></div>
-      <p class="muted">${running ? "Google is loading the site on a phone, then the 3 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
+      <p class="muted">${running ? "Google is loading the site on a phone, then the 5 biggest issues are written up. Usually 1 to 2 minutes." : "Starts within a minute. You can close this tab, it keeps going."}</p>
     </div>`;
   } else if (isUnreachable(latest) && !done) {
     bodyHtml = `<p class="audit-note"><span class="audit-state offline">Site unreachable</span> The site didn't respond when it was tested, so there is nothing to audit. Open it in a browser to check, then run the audit again.</p>`;
@@ -328,7 +328,7 @@ function reportBox(leadId) {
   } else if (latest?.status === "skipped" && !done) {
     bodyHtml = `<p class="audit-note">${esc(latest.error || "Not audited.")}</p>`;
   } else if (!done) {
-    bodyHtml = `<p class="audit-note muted">${canAudit ? "No audit yet. Run one to get a score and the 3 biggest issues with this site." : "Add a website to this lead to run an audit."}</p>`;
+    bodyHtml = `<p class="audit-note muted">${canAudit ? "No audit yet. Run one to get a score and the 5 biggest issues with this site." : "Add a website to this lead to run an audit."}</p>`;
   }
   if (done) {
     bodyHtml += `<div class="report-mini">
@@ -400,9 +400,20 @@ async function renderReport() {
               ${i.facts?.length ? `<ul class="evidence">${i.facts.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>` : ""}
             </div>
           </li>`).join("")}</ol>` : `<p class="muted">This site passed the main checks. It may still be worth a look in person.</p>`}
-        ${report.writer === "template" ? `<p class="hint">Written with standard wording. Add ANTHROPIC_API_KEY on the Worker for wording tailored to each site.</p>` : ""}
+        ${writerNote(report.writer)}
       </section>
     </div>`;
+}
+
+// Why a report uses standard wording instead of Claude's. Older reports only stored "template".
+function writerNote(writer) {
+  if (!writer || !writer.startsWith("template")) return "";
+  const reason = writer.slice("template".length).replace(/^:\s*/, "");
+  let text;
+  if (!reason) text = "Written with standard wording because Claude's write-up wasn't available when this audit ran. Run it again for wording tailored to this site.";
+  else if (reason === "no_key") text = "Written with standard wording. The Worker can't see ANTHROPIC_API_KEY, so add it as a secret on the production Worker for wording tailored to each site.";
+  else text = `Written with standard wording because Claude's write-up failed: ${reason.replace(/^\w+:\s*/, "")}`;
+  return `<p class="hint">${esc(text)}</p>`;
 }
 
 function leadRow(l, { showDue = true } = {}) {

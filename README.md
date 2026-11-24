@@ -10,7 +10,7 @@ Runs on Cloudflare: one Worker serves the screens and the API, D1 stores the dat
 - **Call list**: follow-ups due, then new leads (weak websites first). Log the outcome, note, status and next follow-up, then move to the next lead.
 - **Leads**: every lead, with search, filters and sorting.
 - **Find leads**: Google search by category and city. Each result's website is checked and flagged: weak website, no website, social page only, or good website.
-- **Website reports**: select leads on the Leads screen and press **Run audit**. Audits run in the background (about 3 a minute, the tab can be closed). Each report has a score out of 100, a phone screenshot of the homepage and the 3 biggest issues with what they cost the business. Reports never say how to fix an issue.
+- **Website reports**: select leads on the Leads screen and press **Run audit**. Audits run in the background (about 3 a minute, the tab can be closed). Each report has a score out of 100, a phone screenshot of the homepage and the 5 biggest issues with what they cost the business. Reports never say how to fix an issue.
 
 ## First-time setup (Cloudflare dashboard)
 
